@@ -101,6 +101,7 @@ $conn->close();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Finance Dashboard</title>
     <link rel="stylesheet" href="../css/common.css">
+    <link rel="stylesheet" href="../css/enhancements.css">
     <style>
         /* Finance-specific styles */
         .finance-header {
@@ -621,6 +622,7 @@ function clearFilter(filterName) {
     window.location.href = url.toString();
 }
 </script>
+
 
 </body>
 </html>

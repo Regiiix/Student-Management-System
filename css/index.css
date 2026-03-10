@@ -44,88 +44,78 @@
     align-items: center;
 }
 
-/* Filter Toggle Button */
-.btn-filter-toggle {
-    margin-left: auto;
-    position: relative;
-    padding-right: 24px;
-}
-
-.filter-active-dot {
-    position: absolute;
-    right: 10px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 6px;
-    height: 6px;
-    background: var(--primary);
-    border-radius: 50%;
-}
-
-/* Filter Panel - Progressive Disclosure */
-.filter-panel {
-    display: none;
-    width: 100%;
-    padding-top: 16px;
-    margin-top: 16px;
-    border-top: 1px solid var(--border);
-    animation: slideDown 0.15s ease-out;
-}
-
-.filter-panel.active {
-    display: block;
-}
-
-@keyframes slideDown {
-    from {
-        opacity: 0;
-        transform: translateY(-8px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.sort-controls {
+/* Inline Filters */
+.inline-filters {
     display: flex;
     align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
+    gap: 8px;
+    margin-left: auto;
 }
 
-.sort-controls label {
-    font-size: 13px;
-    color: var(--text-secondary);
-    font-weight: 500;
+.inline-filter-form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
-.sort-select {
-    padding: 8px 12px;
+.filter-select {
+    padding: 6px 10px;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     font-size: 13px;
     background: var(--surface);
     color: var(--text);
-    min-width: 120px;
+    cursor: pointer;
+    transition: border-color 0.15s;
 }
 
-.sort-select:focus {
+.filter-select:hover {
+    border-color: var(--border-hover);
+}
+
+.filter-select:focus {
     outline: none;
     border-color: var(--primary);
 }
 
-.filter-form {
+.filter-order-btn {
+    width: 32px;
+    height: 32px;
     display: flex;
     align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.15s;
 }
 
-.filter-form label {
-    font-size: 13px;
-    color: var(--text-secondary);
+.filter-order-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.filter-reset {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--status-error-bg);
+    color: var(--status-error);
+    font-size: 16px;
     font-weight: 500;
+    text-decoration: none;
+    transition: all 0.15s;
+}
+
+.filter-reset:hover {
+    background: var(--status-error);
+    color: white;
 }
 
 /* Search */

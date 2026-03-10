@@ -30,6 +30,7 @@ $conn->close();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Personal Information - <?php echo htmlspecialchars($student['first_name'] . ' ' . $student['last_name']); ?></title>
     <link rel="stylesheet" href="../css/common.css">
+    <link rel="stylesheet" href="../css/enhancements.css">
     <link rel="stylesheet" href="../css/details.css">
     <script src="../js/app.js" defer></script>
 </head>
@@ -139,5 +140,6 @@ $conn->close();
             </div>
         </div>
     </div>
+
 </body>
 </html>

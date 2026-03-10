@@ -808,6 +808,7 @@ if (!$is_ajax) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Student Records - <?php echo htmlspecialchars($student['first_name'] . ' ' . $student['last_name']); ?></title>
     <link rel="stylesheet" href="../css/common.css">
+    <link rel="stylesheet" href="../css/enhancements.css">
     <link rel="stylesheet" href="../css/details.css">
     <script src="../js/app.js" defer></script>
     <style>
@@ -1572,5 +1573,7 @@ if (!$is_ajax) {
         if (event.target == classModal) closeClassModal();
     }
 </script>
+
+</body>
 </html>
 <?php endif; ?>

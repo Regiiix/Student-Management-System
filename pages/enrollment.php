@@ -150,17 +150,24 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
     $year_level = intval($_GET['year_level'] ?? 0);
     $semester = intval($_GET['semester'] ?? 0);
     $search = trim($_GET['search'] ?? '');
+    $student_id = intval($_GET['student_id'] ?? 0);
+    $academic_year = trim($_GET['academic_year'] ?? '');
     
     if ($program_id <= 0) {
         echo json_encode(['success' => false, 'error' => 'Program is required']);
         exit;
     }
     
-    // Build query with optional search filter
-    $sql = "SELECT s.schedule_id, s.day_of_week, s.start_time, s.end_time, s.room,
-                   s.capacity, s.enrolled_count,
+    // Build query with GROUP BY to consolidate multiple day entries per course
+    // Uses MIN(schedule_id) as representative ID and GROUP_CONCAT for days/times
+    $sql = "SELECT MIN(s.schedule_id) as schedule_id, 
+                   s.curriculum_id,
+                   GROUP_CONCAT(DISTINCT CONCAT(s.day_of_week, ' ', DATE_FORMAT(s.start_time, '%h:%i %p'), '-', DATE_FORMAT(s.end_time, '%h:%i %p')) ORDER BY FIELD(s.day_of_week, 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun') SEPARATOR ', ') as schedule_days,
+                   MAX(s.room) as room,
+                   MAX(s.capacity) as capacity, 
+                   MAX(s.enrolled_count) as enrolled_count,
                    c.course_code, c.course_name, c.units, c.year_level, c.semester,
-                   CONCAT(t.title, ' ', t.first_name, ' ', t.last_name) as teacher_name
+                   MAX(CONCAT(t.title, ' ', t.first_name, ' ', t.last_name)) as teacher_name
             FROM schedules s
             JOIN curriculum c ON s.curriculum_id = c.curriculum_id
             LEFT JOIN teachers t ON s.teacher_id = t.teacher_id
@@ -178,10 +185,64 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
         $types .= 'sss';
     }
     
-    $sql .= " ORDER BY c.course_code, s.day_of_week";
+    $sql .= " GROUP BY s.curriculum_id, c.course_code, c.course_name, c.units, c.year_level, c.semester";
+    $sql .= " ORDER BY c.course_code";
     
     $result = db_query($conn, $sql, $types, $params);
     $schedules = db_fetch_all($result);
+    
+    // Check enrollment status for each course if student_id is provided
+    if ($student_id > 0) {
+        // Get ALL courses student is currently enrolled in (any academic year with status 'Enrolled')
+        $enrolled_sql = "SELECT DISTINCT e.curriculum_id 
+                         FROM enrollments e
+                         WHERE e.student_id = ? AND e.status = 'Enrolled'";
+        $enrolled_result = db_query($conn, $enrolled_sql, 'i', [$student_id]);
+        $enrolled_courses = [];
+        if ($enrolled_result && $enrolled_result !== true) {
+            while ($row = mysqli_fetch_assoc($enrolled_result)) {
+                $enrolled_courses[] = $row['curriculum_id'];
+            }
+        }
+        
+        // Get courses already passed (status = 'Passed')
+        $passed_sql = "SELECT DISTINCT e.curriculum_id 
+                       FROM enrollments e
+                       WHERE e.student_id = ? AND e.status = 'Passed'";
+        $passed_result = db_query($conn, $passed_sql, 'i', [$student_id]);
+        $passed_courses = [];
+        if ($passed_result && $passed_result !== true) {
+            while ($row = mysqli_fetch_assoc($passed_result)) {
+                $passed_courses[] = $row['curriculum_id'];
+            }
+        }
+        
+        // Get courses that were failed (status = 'Failed') - needs retake
+        $failed_sql = "SELECT DISTINCT e.curriculum_id 
+                       FROM enrollments e
+                       WHERE e.student_id = ? AND e.status = 'Failed'";
+        $failed_result = db_query($conn, $failed_sql, 'i', [$student_id]);
+        $failed_courses = [];
+        if ($failed_result && $failed_result !== true) {
+            while ($row = mysqli_fetch_assoc($failed_result)) {
+                $failed_courses[] = $row['curriculum_id'];
+            }
+        }
+        
+        // Add status to each schedule
+        foreach ($schedules as &$schedule) {
+            $curriculum_id = $schedule['curriculum_id'];
+            if (in_array($curriculum_id, $enrolled_courses)) {
+                $schedule['enrollment_status'] = 'enrolled';
+            } elseif (in_array($curriculum_id, $passed_courses)) {
+                $schedule['enrollment_status'] = 'passed';
+            } elseif (in_array($curriculum_id, $failed_courses)) {
+                $schedule['enrollment_status'] = 'failed';
+            } else {
+                $schedule['enrollment_status'] = 'available';
+            }
+        }
+    }
     
     echo json_encode([
         'success' => true,
@@ -311,8 +372,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'bulk_enroll') {
                 continue;
             }
             
-            // Update enrolled count
-            db_query($conn, "UPDATE schedules SET enrolled_count = enrolled_count + 1 WHERE schedule_id = ?", 'i', [$schedule_id]);
+            // Update enrolled count for ALL schedule rows of this curriculum (not just the one schedule_id)
+            db_query($conn, "UPDATE schedules SET enrolled_count = enrolled_count + 1 WHERE curriculum_id = ?", 'i', [$sched_info['curriculum_id']]);
             
             $enrolled_courses[] = $sched_info['course_code'] . ' - ' . $sched_info['course_name'];
         }
@@ -348,6 +409,7 @@ $conn->close();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Enrollment</title>
     <link rel="stylesheet" href="../css/common.css">
+    <link rel="stylesheet" href="../css/enhancements.css">
     <link rel="stylesheet" href="../css/details.css">
     <script src="../js/app.js" defer></script>
     <style>
@@ -697,6 +759,138 @@ $conn->close();
         .schedule-item .slots.full {
             color: #dc3545;
         }
+        
+        /* Enrollment Status Labels */
+        .schedule-item .enrollment-status {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-left: 8px;
+        }
+        .schedule-item .enrollment-status.enrolled {
+            background: #cce5ff;
+            color: #004085;
+        }
+        .schedule-item .enrollment-status.passed {
+            background: #d4edda;
+            color: #155724;
+        }
+        .schedule-item .enrollment-status.failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .schedule-item.is-enrolled {
+            opacity: 0.7;
+            border-left: 3px solid #007bff;
+        }
+        .schedule-item.is-passed {
+            opacity: 0.6;
+            border-left: 3px solid #28a745;
+        }
+        .schedule-item.is-failed {
+            border-left: 3px solid #dc3545;
+        }
+        
+        /* Notification Modal */
+        .notification-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s ease;
+        }
+        .notification-modal-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+        .notification-modal {
+            background: #fff;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 380px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
+            transform: translateY(-20px) scale(0.95);
+            transition: transform 0.2s ease;
+        }
+        .notification-modal-overlay.active .notification-modal {
+            transform: translateY(0) scale(1);
+        }
+        .notification-modal-header {
+            padding: 20px 20px 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .notification-modal-header .modal-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        .notification-modal-header .modal-icon.info {
+            background: #cce5ff;
+            color: #004085;
+        }
+        .notification-modal-header .modal-icon.warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .notification-modal-header .modal-icon.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .notification-modal-header .modal-icon.success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .notification-modal-header h3 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 600;
+            color: #212529;
+        }
+        .notification-modal-body {
+            padding: 16px 20px 20px;
+        }
+        .notification-modal-body p {
+            margin: 0;
+            font-size: 14px;
+            color: #495057;
+            line-height: 1.6;
+        }
+        .notification-modal-footer {
+            padding: 0 20px 20px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+        .notification-modal-footer .btn {
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .notification-modal-footer .btn-secondary {
+            background: #e9ecef;
+            color: #495057;
+        }
+        .notification-modal-footer .btn-secondary:hover {
+            background: #dee2e6;
+        }
         .success-msg {
             background: #d4edda;
             color: #155724;
@@ -711,6 +905,47 @@ $conn->close();
             border-radius: 6px;
             margin-top: 10px;
             font-size: 13px;
+        }
+        
+        /* Term Mismatch Warning */
+        .term-mismatch-warning {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+        .term-mismatch-warning .warning-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .term-mismatch-warning .warning-details {
+            margin-bottom: 10px;
+            line-height: 1.6;
+        }
+        .term-mismatch-warning .warning-recommendation {
+            background: #fff;
+            padding: 10px 12px;
+            border-radius: 4px;
+            margin-top: 8px;
+        }
+        .term-mismatch-warning .recommended-code {
+            font-weight: 600;
+            color: #155724;
+            font-family: monospace;
+            font-size: 16px;
+        }
+        .term-mismatch-warning .btn-use-recommended {
+            margin-top: 10px;
+            background: #155724;
+            color: #fff;
+            padding: 8px 16px;
+            font-size: 13px;
+        }
+        .term-mismatch-warning .btn-use-recommended:hover {
+            background: #0d3d17;
         }
         /* Recent students */
         .recent-students-section {
@@ -789,6 +1024,97 @@ $conn->close();
             background: #28a745;
             color: #fff;
             border-color: #28a745;
+        }
+        
+        /* Success Modal */
+        .success-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s ease;
+        }
+        .success-modal-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+        .success-modal {
+            background: #fff;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 420px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
+            transform: translateY(-20px) scale(0.95);
+            transition: transform 0.2s ease;
+        }
+        .success-modal-overlay.active .success-modal {
+            transform: translateY(0) scale(1);
+        }
+        .success-modal-header {
+            padding: 24px 24px 0;
+        }
+        .success-modal-header h3 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+            color: #155724;
+        }
+        .success-modal-body {
+            padding: 16px 24px 24px;
+        }
+        .success-modal-body p {
+            margin: 0 0 12px;
+            font-size: 15px;
+            color: #495057;
+            line-height: 1.5;
+        }
+        .success-modal-body p:last-child {
+            margin-bottom: 0;
+        }
+        .success-modal-courses {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-top: 16px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .success-modal-courses .course-item {
+            padding: 6px 0;
+            font-size: 14px;
+            color: #212529;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .success-modal-courses .course-item:last-child {
+            border-bottom: none;
+        }
+        .success-modal-warnings {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-top: 12px;
+            font-size: 13px;
+            color: #856404;
+        }
+        .success-modal-footer {
+            padding: 16px 24px 24px;
+            display: flex;
+            justify-content: flex-end;
+        }
+        .success-modal-footer .btn {
+            padding: 10px 24px;
+            font-size: 14px;
+            font-weight: 500;
         }
     </style>
 </head>
@@ -872,6 +1198,16 @@ $conn->close();
                                 <input type="text" id="semester" readonly>
                             </div>
                         </div>
+                        
+                        <div id="termMismatchWarning" class="term-mismatch-warning hidden">
+                            <div class="warning-title">Term Code Mismatch</div>
+                            <div class="warning-details" id="termMismatchDetails"></div>
+                            <div class="warning-recommendation">
+                                Recommended term code: <span class="recommended-code" id="recommendedTermCode"></span>
+                                <br>
+                                <button type="button" class="btn btn-use-recommended" onclick="useRecommendedTermCode()">Use Recommended Code</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -926,40 +1262,6 @@ $conn->close();
         </div>
     </div>
 
-    <!-- Enrollment Confirmation Modal -->
-    <div class="modal-overlay hidden" id="confirmEnrollModal">
-        <div class="modal-content confirm-modal">
-            <div class="modal-header">Confirm Enrollment</div>
-            <div class="modal-body">
-                <p style="margin-bottom: 15px; color: #495057;">Please review the enrollment details:</p>
-                
-                <div class="confirm-section">
-                    <label>Term Code / Academic Year</label>
-                    <div class="value" id="confirmTermCode">-</div>
-                </div>
-                
-                <div class="confirm-section">
-                    <label>Student</label>
-                    <div class="value" id="confirmStudent">-</div>
-                </div>
-                
-                <div class="confirm-section">
-                    <label>Program</label>
-                    <div class="value" id="confirmProgram">-</div>
-                </div>
-                
-                <div class="confirm-section">
-                    <label>Subjects to Enroll (<span id="confirmSubjectCount">0</span>)</label>
-                    <div id="confirmSubjectsList" class="confirm-subjects"></div>
-                </div>
-            </div>
-            <div class="modal-actions">
-                <button type="button" class="btn btn-back" id="cancelEnrollBtn">Cancel</button>
-                <button type="button" class="btn btn-add-subject" id="confirmEnrollBtn">Confirm Enrollment</button>
-            </div>
-        </div>
-    </div>
-
     <!-- Loading Spinner -->
     <div class="spinner-overlay" id="loadingSpinner">
         <div class="spinner"></div>
@@ -1001,9 +1303,6 @@ $conn->close();
         const pendingList = document.getElementById('pendingList');
         const pendingItems = document.getElementById('pendingItems');
         const enrollStudentBtn = document.getElementById('enrollStudentBtn');
-        const confirmEnrollModal = document.getElementById('confirmEnrollModal');
-        const confirmEnrollBtn = document.getElementById('confirmEnrollBtn');
-        const cancelEnrollBtn = document.getElementById('cancelEnrollBtn');
         const scheduleAutocomplete = document.getElementById('scheduleAutocomplete');
         const toggleScheduleListBtn = document.getElementById('toggleScheduleListBtn');
         const scheduleSuggestionsSection = document.getElementById('scheduleSuggestionsSection');
@@ -1027,7 +1326,7 @@ $conn->close();
         // Toggle schedule suggestions list
         toggleScheduleListBtn.addEventListener('click', function() {
             if (!currentStudent || !confirmedProgramId) {
-                alert('Please select a student and confirm program first');
+                showNotification('warning', 'Action Required', 'Please select a student and confirm program first.');
                 return;
             }
             
@@ -1046,29 +1345,62 @@ $conn->close();
             filterSemester.textContent = validatedTermCode.semester === 0 ? 'Summer' : (validatedTermCode.semester === 1 ? '1st' : '2nd');
             schedulesList.innerHTML = '<span style="color: #6c757d;">Loading...</span>';
             
-            fetch(`?action=get_schedule_suggestions&program_id=${confirmedProgramId}&year_level=${currentStudent.year_level}&semester=${validatedTermCode.semester}`)
+            const apiUrl = `?action=get_schedule_suggestions&program_id=${confirmedProgramId}&year_level=${currentStudent.year_level}&semester=${validatedTermCode.semester}&student_id=${currentStudent.id}&academic_year=${encodeURIComponent(validatedTermCode.academicYear)}`;
+            
+            fetch(apiUrl)
                 .then(r => r.json())
                 .then(data => {
                     if (data.success && data.schedules.length > 0) {
                         schedulesList.innerHTML = data.schedules.map(s => {
                             const slotsAvailable = s.capacity - s.enrolled_count;
                             const isFull = slotsAvailable <= 0;
+                            const status = s.enrollment_status || 'available';
+                            const isEnrolled = status === 'enrolled';
+                            const isPassed = status === 'passed';
+                            const isFailed = status === 'failed';
+                            const statusClass = isEnrolled ? 'is-enrolled' : (isPassed ? 'is-passed' : (isFailed ? 'is-failed' : ''));
+                            const statusLabel = isEnrolled ? '<span class="enrollment-status enrolled">Currently Enrolled</span>' : 
+                                               (isPassed ? '<span class="enrollment-status passed">Passed</span>' : 
+                                               (isFailed ? '<span class="enrollment-status failed">Failed - Retake</span>' : ''));
+                            
                             return `
-                                <div class="schedule-item" data-id="${s.schedule_id}">
-                                    <span class="schedule-id">ID: ${s.schedule_id}</span>
+                                <div class="schedule-item ${statusClass}" data-id="${s.schedule_id}" data-status="${status}">
+                                    <span class="schedule-id">ID: ${s.schedule_id}${statusLabel}</span>
                                     <div class="course-info"><strong>${s.course_code}</strong> - ${s.course_name} (${s.units} units)</div>
                                     <div class="schedule-details">
-                                        ${s.day_of_week} ${s.start_time}-${s.end_time} | Room: ${s.room || 'TBA'} | ${s.teacher_name || 'TBA'}
+                                        ${s.schedule_days || 'TBA'} | Room: ${s.room || 'TBA'} | ${s.teacher_name || 'TBA'}
                                     </div>
                                     <span class="slots ${isFull ? 'full' : ''}">Slots: ${slotsAvailable}/${s.capacity} ${isFull ? '(FULL)' : 'available'}</span>
                                 </div>
                             `;
                         }).join('');
                         
-                        // Add click handlers
+                        // Add click handlers (skip enrolled courses, confirm for passed)
                         schedulesList.querySelectorAll('.schedule-item').forEach(item => {
                             item.addEventListener('click', function() {
-                                scheduleCodeInput.value = this.dataset.id;
+                                const itemEl = this;
+                                const status = itemEl.dataset.status;
+                                const scheduleId = itemEl.dataset.id;
+                                
+                                if (status === 'enrolled') {
+                                    showNotification('info', 'Already Enrolled', 'This student is already enrolled in this course for the current term.');
+                                    return;
+                                }
+                                if (status === 'passed') {
+                                    showConfirmation('warning', 'Course Already Passed', 
+                                        'This student has already passed this course. Are you sure you want to enroll them again?',
+                                        'Enroll Anyway',
+                                        function() {
+                                            scheduleCodeInput.value = scheduleId;
+                                            scheduleSuggestionsSection.classList.add('hidden');
+                                            toggleScheduleListBtn.textContent = 'Show All Schedules';
+                                            lookupSchedule();
+                                        }
+                                    );
+                                    return;
+                                }
+                                // For available or failed courses, proceed normally
+                                scheduleCodeInput.value = scheduleId;
                                 scheduleSuggestionsSection.classList.add('hidden');
                                 toggleScheduleListBtn.textContent = 'Show All Schedules';
                                 lookupSchedule();
@@ -1095,23 +1427,34 @@ $conn->close();
             }
             
             autocompleteTimeout = setTimeout(() => {
-                fetch(`?action=get_schedule_suggestions&program_id=${confirmedProgramId}&year_level=${currentStudent.year_level}&semester=${validatedTermCode.semester}&search=${encodeURIComponent(searchTerm)}`)
+                const autocompleteUrl = `?action=get_schedule_suggestions&program_id=${confirmedProgramId}&year_level=${currentStudent.year_level}&semester=${validatedTermCode.semester}&search=${encodeURIComponent(searchTerm)}&student_id=${currentStudent.id}&academic_year=${encodeURIComponent(validatedTermCode.academicYear)}`;
+                
+                fetch(autocompleteUrl)
                     .then(r => r.json())
                     .then(data => {
                         if (data.success && data.schedules.length > 0) {
                             scheduleAutocomplete.innerHTML = data.schedules.slice(0, 8).map(s => {
                                 const slotsAvailable = s.capacity - s.enrolled_count;
+                                const status = s.enrollment_status || 'available';
+                                const statusBadge = status === 'enrolled' ? ' <span style="color:#004085;font-size:10px;">[ENROLLED]</span>' : 
+                                                   (status === 'passed' ? ' <span style="color:#155724;font-size:10px;">[PASSED]</span>' :
+                                                   (status === 'failed' ? ' <span style="color:#721c24;font-size:10px;">[FAILED]</span>' : ''));
                                 return `
-                                    <div class="autocomplete-item" data-id="${s.schedule_id}">
-                                        <span class="schedule-id">ID: ${s.schedule_id}</span>
+                                    <div class="autocomplete-item" data-id="${s.schedule_id}" data-status="${status}">
+                                        <span class="schedule-id">ID: ${s.schedule_id}${statusBadge}</span>
                                         <div class="course-info">${s.course_code} - ${s.course_name}</div>
-                                        <div class="schedule-details">${s.day_of_week} ${s.start_time}-${s.end_time} | Slots: ${slotsAvailable}/${s.capacity}</div>
+                                        <div class="schedule-details">${s.schedule_days || 'TBA'} | Slots: ${slotsAvailable}/${s.capacity}</div>
                                     </div>
                                 `;
                             }).join('');
                             
                             scheduleAutocomplete.querySelectorAll('.autocomplete-item').forEach(item => {
                                 item.addEventListener('click', function() {
+                                    const status = this.dataset.status;
+                                    if (status === 'enrolled') {
+                                        showNotification('info', 'Already Enrolled', 'This student is already enrolled in this course.');
+                                        return;
+                                    }
                                     scheduleCodeInput.value = this.dataset.id;
                                     scheduleAutocomplete.classList.add('hidden');
                                     lookupSchedule();
@@ -1184,6 +1527,11 @@ $conn->close();
             studentSection.classList.remove('hidden');
             studentNumberInput.focus();
             
+            // Re-check term mismatch if student is already loaded
+            if (currentStudent) {
+                checkTermMismatch(currentStudent);
+            }
+            
             // Load recent students when student section shows
             loadRecentStudents();
         }
@@ -1239,19 +1587,91 @@ $conn->close();
             const yearLevelNames = {1: '1st Year', 2: '2nd Year', 3: '3rd Year', 4: '4th Year'};
             const semesterNames = {0: 'Summer Term', 1: '1st Semester', 2: '2nd Semester'};
             document.getElementById('year_level').value = yearLevelNames[student.year_level] || student.year_level;
-            document.getElementById('semester').value = semesterNames[validatedTermCode.semester];
+            document.getElementById('semester').value = semesterNames[student.current_semester];
             
             studentInfoDisplay.classList.remove('hidden');
+            
+            // Check for term mismatch
+            checkTermMismatch(student);
+            
             programInput.focus();
+        }
+        
+        function checkTermMismatch(student) {
+            const termMismatchWarning = document.getElementById('termMismatchWarning');
+            const termMismatchDetails = document.getElementById('termMismatchDetails');
+            const recommendedTermCode = document.getElementById('recommendedTermCode');
+            
+            if (!validatedTermCode) {
+                termMismatchWarning.classList.add('hidden');
+                return;
+            }
+            
+            const termSemester = validatedTermCode.semester;
+            const studentSemester = parseInt(student.current_semester);
+            const studentYearLevel = parseInt(student.year_level);
+            const termCode = validatedTermCode.code;
+            const termYearPart = termCode.substring(0, 2);
+            
+            const semesterNames = {0: 'Summer', 1: '1st Semester', 2: '2nd Semester'};
+            
+            let issues = [];
+            let recommendations = [];
+            
+            // Check semester mismatch
+            if (termSemester !== studentSemester) {
+                issues.push(`The term code <strong>${termCode}</strong> indicates <strong>${semesterNames[termSemester]}</strong>, but the student is currently in <strong>${semesterNames[studentSemester]}</strong>.`);
+                recommendations.push(`semester digit from ${termSemester} to ${studentSemester}`);
+            }
+            
+            if (issues.length > 0) {
+                // Build recommended term code
+                const newTermCode = termYearPart + studentSemester;
+                
+                termMismatchDetails.innerHTML = issues.join('<br><br>');
+                recommendedTermCode.textContent = newTermCode;
+                termMismatchWarning.classList.remove('hidden');
+                
+                // Disable proceed until fixed
+                scheduleSection.classList.add('hidden');
+            } else {
+                termMismatchWarning.classList.add('hidden');
+            }
+        }
+        
+        function useRecommendedTermCode() {
+            const recommendedCode = document.getElementById('recommendedTermCode').textContent;
+            if (recommendedCode) {
+                termCodeInput.value = recommendedCode;
+                validateTermCode();
+                
+                // Re-check with current student
+                if (currentStudent) {
+                    setTimeout(() => {
+                        checkTermMismatch(currentStudent);
+                        if (document.getElementById('termMismatchWarning').classList.contains('hidden')) {
+                            // No more issues, show schedule section
+                            if (confirmedProgramId) {
+                                scheduleSection.classList.remove('hidden');
+                            }
+                        }
+                    }, 100);
+                }
+            }
         }
         
         // Program selection (direct, no confirmation)
         function selectProgram(programId, programCode) {
-            confirmedProgramId = programId;
-            programIdField.value = programId;
+            confirmedProgramId = parseInt(programId, 10);
+            programIdField.value = confirmedProgramId;
             programInput.value = programCode;
-            scheduleSection.classList.remove('hidden');
-            scheduleCodeInput.focus();
+            
+            // Only show schedule section if no term mismatch
+            const termMismatchWarning = document.getElementById('termMismatchWarning');
+            if (termMismatchWarning.classList.contains('hidden')) {
+                scheduleSection.classList.remove('hidden');
+                scheduleCodeInput.focus();
+            }
         }
         
         programInput.addEventListener('keydown', function(e) {
@@ -1268,7 +1688,7 @@ $conn->close();
                         return;
                     }
                 }
-                alert('Program code not found. Please select from the list below.');
+                showNotification('warning', 'Program Not Found', 'Program code not found. Please select from the list below.');
             }
         });
         
@@ -1348,12 +1768,23 @@ $conn->close();
         
         // Add subject to pending list (no immediate enrollment)
         addSubjectBtn.addEventListener('click', function() {
-            if (!currentSchedule || !currentStudent || !validatedTermCode) return;
+            if (!currentSchedule) {
+                showNotification('warning', 'Schedule Required', 'Please select a schedule first.');
+                return;
+            }
+            if (!currentStudent) {
+                showNotification('warning', 'Student Required', 'Please select a student first.');
+                return;
+            }
+            if (!validatedTermCode) {
+                showNotification('warning', 'Term Code Required', 'Please enter a valid term code first.');
+                return;
+            }
             
             // Check if already in pending list
             const alreadyPending = pendingSubjects.some(s => s.schedule_id === currentSchedule.schedule_id);
             if (alreadyPending) {
-                alert('This schedule is already in the pending list');
+                showNotification('info', 'Already Added', 'This schedule is already in the pending list.');
                 return;
             }
             
@@ -1399,43 +1830,49 @@ $conn->close();
             enrollStudentBtn.disabled = false;
         }
         
-        // Show enrollment confirmation modal
+        // Direct enrollment - skip modal for simplicity
         enrollStudentBtn.addEventListener('click', function() {
-            if (!currentStudent || !confirmedProgramId || !validatedTermCode || pendingSubjects.length === 0) {
-                alert('Please complete all required fields and add at least one subject');
+            console.log('Enroll button clicked');
+            console.log('currentStudent:', currentStudent);
+            console.log('confirmedProgramId:', confirmedProgramId);
+            console.log('validatedTermCode:', validatedTermCode);
+            console.log('pendingSubjects:', pendingSubjects);
+            
+            if (!currentStudent) {
+                showNotification('warning', 'Student Required', 'Please select a student first.');
+                return;
+            }
+            if (!confirmedProgramId) {
+                showNotification('warning', 'Program Required', 'Please select a program first.');
+                return;
+            }
+            if (!validatedTermCode) {
+                showNotification('warning', 'Term Code Required', 'Please enter a valid term code first.');
+                return;
+            }
+            if (pendingSubjects.length === 0) {
+                showNotification('warning', 'No Subjects', 'Please add at least one subject before enrolling.');
                 return;
             }
             
-            // Populate confirmation modal
-            document.getElementById('confirmTermCode').innerHTML = 
-                `<strong>${validatedTermCode.termCode}</strong> → ${validatedTermCode.academicYear} (${validatedTermCode.semester === 0 ? 'Summer' : (validatedTermCode.semester === 1 ? '1st Semester' : '2nd Semester')})`;
-            document.getElementById('confirmStudent').innerHTML = 
-                `<strong>${currentStudent.student_number}</strong> - ${currentStudent.name}`;
-            document.getElementById('confirmProgram').textContent = programInput.value;
-            document.getElementById('confirmSubjectCount').textContent = pendingSubjects.length;
-            document.getElementById('confirmSubjectsList').innerHTML = pendingSubjects.map(s => `
-                <div class="confirm-subject-item">
-                    <strong>${s.course_code}</strong> - ${s.course_name}<br>
-                    <small style="color: #6c757d;">${s.day_of_week} ${s.time} | ${s.units} units</small>
-                </div>
-            `).join('');
+            // Show confirmation modal
+            const subjectList = pendingSubjects.map(s => s.course_code).join(', ');
+            const confirmMsg = `<strong>${currentStudent.name}</strong><br><br>
+                <strong>Subjects (${pendingSubjects.length}):</strong> ${subjectList}<br>
+                <strong>Term:</strong> ${validatedTermCode.academicYear} (Semester ${validatedTermCode.semester})`;
             
-            confirmEnrollModal.classList.remove('hidden');
+            showConfirmation('info', 'Confirm Enrollment', confirmMsg, 'Enroll Student',
+                function() {
+                    // Proceed with enrollment
+                    processEnrollment();
+                }
+            );
         });
         
-        // Cancel enrollment
-        cancelEnrollBtn.addEventListener('click', function() {
-            confirmEnrollModal.classList.add('hidden');
-        });
-        
-        // Close modal on overlay click
-        confirmEnrollModal.addEventListener('click', function(e) {
-            if (e.target === this) this.classList.add('hidden');
-        });
-        
-        // Confirm enrollment - do bulk enrollment
-        confirmEnrollBtn.addEventListener('click', function() {
-            if (!currentStudent || !confirmedProgramId || !validatedTermCode || pendingSubjects.length === 0) return;
+        function processEnrollment() {
+            // Disable button during request
+            enrollStudentBtn.disabled = true;
+            enrollStudentBtn.textContent = 'Enrolling...';
             
             const enrollData = {
                 student_id: currentStudent.id,
@@ -1445,42 +1882,53 @@ $conn->close();
                 schedule_ids: pendingSubjects.map(s => s.schedule_id)
             };
             
-            confirmEnrollBtn.disabled = true;
-            confirmEnrollBtn.textContent = 'Enrolling...';
+            console.log('Sending enrollData:', enrollData);
             
             fetch('?action=bulk_enroll', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(enrollData)
             })
-                .then(r => r.json())
+                .then(r => {
+                    console.log('Response status:', r.status);
+                    if (!r.ok) throw new Error('Server returned ' + r.status);
+                    return r.text();
+                })
+                .then(text => {
+                    console.log('Response text:', text);
+                    try {
+                        return JSON.parse(text);
+                    } catch (e) {
+                        throw new Error('Invalid JSON response: ' + text.substring(0, 100));
+                    }
+                })
                 .then(data => {
+                    console.log('Parsed data:', data);
                     if (data.success) {
-                        let msg = data.message;
-                        if (data.errors && data.errors.length > 0) {
-                            msg += '\n\nWarnings:\n' + data.errors.join('\n');
-                        }
-                        alert(msg);
+                        // Get enrolled course names for display
+                        const enrolledCourses = pendingSubjects.map(s => `${s.course_code} - ${s.course_name}`);
+                        const warnings = data.errors && data.errors.length > 0 ? data.errors : null;
+                        
+                        showSuccessModal(data.message, enrolledCourses, warnings);
                         
                         // Reset form
-                        confirmEnrollModal.classList.add('hidden');
                         pendingSubjects = [];
                         updatePendingList();
                         scheduleCodeInput.value = '';
                         scheduleDisplay.classList.add('hidden');
-                        
-                        // Optionally redirect or reset entire form
-                        // For now, just allow adding more subjects
                     } else {
-                        alert('Error: ' + (data.error || 'Unknown error'));
+                        showNotification('error', 'Enrollment Failed', data.error || 'Unknown error occurred.');
                     }
                 })
-                .catch(() => alert('Error processing enrollment'))
+                .catch(e => {
+                    console.error('Enrollment error:', e);
+                    showNotification('error', 'Enrollment Error', 'Error processing enrollment: ' + e.message);
+                })
                 .finally(() => {
-                    confirmEnrollBtn.disabled = false;
-                    confirmEnrollBtn.textContent = 'Confirm Enrollment';
+                    enrollStudentBtn.disabled = false;
+                    enrollStudentBtn.textContent = 'Enroll Student';
                 });
-        });
+        }
         
         // Load recent students
         function loadRecentStudents() {
@@ -1515,5 +1963,171 @@ $conn->close();
         
 
     </script>
+
+<!-- Success Modal -->
+<div class="success-modal-overlay" id="successModal">
+    <div class="success-modal">
+        <div class="success-modal-header">
+            <h3 id="successModalTitle">Enrollment Successful</h3>
+        </div>
+        <div class="success-modal-body">
+            <p id="successModalMessage"></p>
+            <div class="success-modal-courses" id="successModalCourses"></div>
+            <div class="success-modal-warnings hidden" id="successModalWarnings"></div>
+        </div>
+        <div class="success-modal-footer">
+            <button type="button" class="btn btn-primary" onclick="closeSuccessModal()">Done</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function showSuccessModal(message, courses, warnings) {
+    const modal = document.getElementById('successModal');
+    const msgEl = document.getElementById('successModalMessage');
+    const coursesEl = document.getElementById('successModalCourses');
+    const warningsEl = document.getElementById('successModalWarnings');
+    
+    msgEl.textContent = message;
+    
+    if (courses && courses.length > 0) {
+        coursesEl.innerHTML = courses.map(c => `<div class="course-item">${c}</div>`).join('');
+        coursesEl.classList.remove('hidden');
+    } else {
+        coursesEl.classList.add('hidden');
+    }
+    
+    if (warnings && warnings.length > 0) {
+        warningsEl.innerHTML = warnings.join('<br>');
+        warningsEl.classList.remove('hidden');
+    } else {
+        warningsEl.classList.add('hidden');
+    }
+    
+    modal.classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeSuccessModal() {
+    const modal = document.getElementById('successModal');
+    modal.classList.remove('active');
+    document.body.style.overflow = '';
+}
+
+// Close on overlay click
+document.getElementById('successModal').addEventListener('click', function(e) {
+    if (e.target === this) closeSuccessModal();
+});
+
+// Close on Escape key
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closeSuccessModal();
+        closeNotificationModal();
+    }
+});
+</script>
+
+<!-- Notification Modal -->
+<div class="notification-modal-overlay" id="notificationModal">
+    <div class="notification-modal">
+        <div class="notification-modal-header">
+            <div class="modal-icon" id="notificationIcon">!</div>
+            <h3 id="notificationTitle">Notice</h3>
+        </div>
+        <div class="notification-modal-body">
+            <p id="notificationMessage"></p>
+        </div>
+        <div class="notification-modal-footer" id="notificationFooter">
+            <button type="button" class="btn btn-primary" onclick="closeNotificationModal()">OK</button>
+        </div>
+    </div>
+</div>
+
+<script>
+let notificationCallback = null;
+let notificationConfirmCallback = null;
+
+function showNotification(type, title, message, callback) {
+    const modal = document.getElementById('notificationModal');
+    const iconEl = document.getElementById('notificationIcon');
+    const titleEl = document.getElementById('notificationTitle');
+    const msgEl = document.getElementById('notificationMessage');
+    const footerEl = document.getElementById('notificationFooter');
+    
+    notificationCallback = callback || null;
+    notificationConfirmCallback = null;
+    
+    // Set icon based on type
+    iconEl.className = 'modal-icon ' + type;
+    switch(type) {
+        case 'error':
+            iconEl.textContent = '✕';
+            break;
+        case 'warning':
+            iconEl.textContent = '!';
+            break;
+        case 'success':
+            iconEl.textContent = '✓';
+            break;
+        default:
+            iconEl.textContent = 'i';
+    }
+    
+    titleEl.textContent = title;
+    msgEl.innerHTML = message;
+    footerEl.innerHTML = '<button type="button" class="btn btn-primary" onclick="closeNotificationModal()">OK</button>';
+    
+    modal.classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function showConfirmation(type, title, message, confirmText, onConfirm, onCancel) {
+    const modal = document.getElementById('notificationModal');
+    const iconEl = document.getElementById('notificationIcon');
+    const titleEl = document.getElementById('notificationTitle');
+    const msgEl = document.getElementById('notificationMessage');
+    const footerEl = document.getElementById('notificationFooter');
+    
+    notificationConfirmCallback = onConfirm || null;
+    notificationCallback = onCancel || null;
+    
+    iconEl.className = 'modal-icon ' + type;
+    iconEl.textContent = type === 'warning' ? '?' : '!';
+    
+    titleEl.textContent = title;
+    msgEl.innerHTML = message;
+    footerEl.innerHTML = `
+        <button type="button" class="btn btn-secondary" onclick="closeNotificationModal(false)">Cancel</button>
+        <button type="button" class="btn btn-primary" onclick="closeNotificationModal(true)">${confirmText || 'Confirm'}</button>
+    `;
+    
+    modal.classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeNotificationModal(confirmed) {
+    const modal = document.getElementById('notificationModal');
+    modal.classList.remove('active');
+    document.body.style.overflow = '';
+    
+    if (confirmed === true && notificationConfirmCallback) {
+        notificationConfirmCallback();
+    } else if (confirmed === false && notificationCallback) {
+        notificationCallback();
+    } else if (notificationCallback && confirmed === undefined) {
+        notificationCallback();
+    }
+    
+    notificationCallback = null;
+    notificationConfirmCallback = null;
+}
+
+// Close notification on overlay click
+document.getElementById('notificationModal').addEventListener('click', function(e) {
+    if (e.target === this) closeNotificationModal(false);
+});
+</script>
+
 </body>
 </html>

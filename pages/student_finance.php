@@ -206,6 +206,7 @@ if (!$is_ajax) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Account Details - <?php echo htmlspecialchars($student['last_name']); ?></title>
     <link rel="stylesheet" href="../css/common.css">
+    <link rel="stylesheet" href="../css/enhancements.css">
     <style>
         .finance-container { max-width: 1000px; margin: 30px auto; padding: 0; }
         .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 30px; }
@@ -345,7 +346,7 @@ if (!$is_ajax) {
                 <?php echo htmlspecialchars($student['student_number']); ?> • <?php echo htmlspecialchars($student['program_code']); ?>
             </span>
             <span class="badge badge-term">
-                📅 <?php echo htmlspecialchars($selected_term['label']); ?>
+                 <?php echo htmlspecialchars($selected_term['label']); ?>
             </span>
             <span class="badge" style="background: rgba(67, 56, 202, 0.1); color: var(--primary);">
                 ₱<?php echo number_format($tuition_rate, 2); ?>/unit
@@ -650,6 +651,7 @@ if (!$is_ajax) {
                 });
         }
     </script>
+
 
 <?php if (!$is_ajax): ?>
 </div> <!-- End container -->

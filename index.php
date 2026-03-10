@@ -189,6 +189,7 @@ if ($selected_program > 0) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Student Management System</title>
     <link rel="stylesheet" href="css/common.css">
+    <link rel="stylesheet" href="css/enhancements.css">
     <link rel="stylesheet" href="css/index.css">
     <script src="js/app.js" defer></script>
 </head>
@@ -252,64 +253,55 @@ if ($selected_program > 0) {
             </div>
 
             <?php if ($view === 'students'): ?>
-                <button class="btn btn-filter-toggle" id="filterToggle" onclick="toggleFilters()">
-                    Filters <?php echo ($filter_program > 0 || $sort_field !== 'last_name' || $sort_order !== 'asc') ? '<span class="filter-active-dot"></span>' : ''; ?>
+            <div class="inline-filters">
+                <select id="filterProgram" class="filter-select" onchange="applyFilters()">
+                    <option value="0">All Programs</option>
+                    <?php foreach ($programs as $p): ?>
+                        <option value="<?php echo $p['program_id']; ?>" <?php echo $filter_program == $p['program_id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($p['program_code']); ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <select id="sortField" class="filter-select" onchange="applyFilters()">
+                    <option value="last_name" <?php echo $sort_field === 'last_name' ? 'selected' : ''; ?>>Sort: Name</option>
+                    <option value="student_number" <?php echo $sort_field === 'student_number' ? 'selected' : ''; ?>>Sort: Student #</option>
+                    <option value="year_level" <?php echo $sort_field === 'year_level' ? 'selected' : ''; ?>>Sort: Year</option>
+                    <option value="program" <?php echo $sort_field === 'program' ? 'selected' : ''; ?>>Sort: Program</option>
+                </select>
+                <button class="filter-order-btn" onclick="toggleSortOrder()" title="Toggle sort order">
+                    <?php echo $sort_order === 'asc' ? '↑' : '↓'; ?>
                 </button>
-                <div class="filter-panel" id="filterPanel">
-                    <div class="sort-controls">
-                    <label for="filterProgram">Program:</label>
-                    <select id="filterProgram" name="filter_program" class="sort-select">
-                        <option value="0">All Programs</option>
-                        <?php foreach ($programs as $p): ?>
-                            <option value="<?php echo $p['program_id']; ?>" <?php echo $filter_program == $p['program_id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($p['program_code']); ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                    <label for="sortField">Sort by:</label>
-                    <select id="sortField" name="sort_field" class="sort-select">
-                        <option value="last_name" <?php echo $sort_field === 'last_name' ? 'selected' : ''; ?>>Last Name</option>
-                        <option value="student_number" <?php echo $sort_field === 'student_number' ? 'selected' : ''; ?>>Student Number</option>
-                        <option value="year_level" <?php echo $sort_field === 'year_level' ? 'selected' : ''; ?>>Year Level</option>
-                        <option value="program" <?php echo $sort_field === 'program' ? 'selected' : ''; ?>>Program</option>
-                    </select>
-                    <select id="sortOrder" name="sort_order" class="sort-select">
-                        <option value="asc" <?php echo $sort_order === 'asc' ? 'selected' : ''; ?>>Ascending</option>
-                        <option value="desc" <?php echo $sort_order === 'desc' ? 'selected' : ''; ?>>Descending</option>
-                    </select>
-                    </div>
-                </div>
+                <?php if ($filter_program > 0 || $sort_field !== 'last_name' || $sort_order !== 'asc'): ?>
+                <a href="?view=students" class="filter-reset" title="Reset filters">×</a>
+                <?php endif; ?>
+            </div>
             <?php endif; ?>
 
             <?php if ($view === 'curriculum'): ?>
-                <button class="btn btn-filter-toggle" id="currFilterToggle" onclick="toggleCurrFilters()">
-                    Filters <?php echo ($curriculum_program > 0 || $curriculum_year > 0 || $curriculum_semester > 0) ? '<span class="filter-active-dot"></span>' : ''; ?>
-                </button>
-                <div class="filter-panel" id="currFilterPanel">
-                <form method="get" class="filter-form">
+            <div class="inline-filters">
+                <form method="get" class="inline-filter-form" id="currFilterForm">
                     <input type="hidden" name="view" value="curriculum">
-                    <label for="curriculumProgram">Program:</label>
-                    <select id="curriculumProgram" name="curriculum_program" class="sort-select">
-                        <option value="0">All</option>
+                    <select name="curriculum_program" class="filter-select" onchange="this.form.submit()">
+                        <option value="0">All Programs</option>
                         <?php foreach ($programs as $p): ?>
-                            <option value="<?php echo $p['program_id']; ?>" <?php echo $curriculum_program == $p['program_id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($p['program_code'] . ' - ' . $p['program_name']); ?></option>
+                            <option value="<?php echo $p['program_id']; ?>" <?php echo $curriculum_program == $p['program_id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($p['program_code']); ?></option>
                         <?php endforeach; ?>
                     </select>
-                    <label for="curriculumYear">Year Level:</label>
-                    <select id="curriculumYear" name="curriculum_year" class="sort-select">
-                        <option value="0">All</option>
-                        <option value="1" <?php echo $curriculum_year == 1 ? 'selected' : ''; ?>>1</option>
-                        <option value="2" <?php echo $curriculum_year == 2 ? 'selected' : ''; ?>>2</option>
-                        <option value="3" <?php echo $curriculum_year == 3 ? 'selected' : ''; ?>>3</option>
-                        <option value="4" <?php echo $curriculum_year == 4 ? 'selected' : ''; ?>>4</option>
+                    <select name="curriculum_year" class="filter-select" onchange="this.form.submit()">
+                        <option value="0">All Years</option>
+                        <option value="1" <?php echo $curriculum_year == 1 ? 'selected' : ''; ?>>Year 1</option>
+                        <option value="2" <?php echo $curriculum_year == 2 ? 'selected' : ''; ?>>Year 2</option>
+                        <option value="3" <?php echo $curriculum_year == 3 ? 'selected' : ''; ?>>Year 3</option>
+                        <option value="4" <?php echo $curriculum_year == 4 ? 'selected' : ''; ?>>Year 4</option>
                     </select>
-                    <label for="curriculumSemester">Semester:</label>
-                    <select id="curriculumSemester" name="curriculum_semester" class="sort-select">
-                        <option value="0">All</option>
-                        <option value="1" <?php echo $curriculum_semester == 1 ? 'selected' : ''; ?>>1st Semester</option>
-                        <option value="2" <?php echo $curriculum_semester == 2 ? 'selected' : ''; ?>>2nd Semester</option>
+                    <select name="curriculum_semester" class="filter-select" onchange="this.form.submit()">
+                        <option value="0">All Semesters</option>
+                        <option value="1" <?php echo $curriculum_semester == 1 ? 'selected' : ''; ?>>1st Sem</option>
+                        <option value="2" <?php echo $curriculum_semester == 2 ? 'selected' : ''; ?>>2nd Sem</option>
                     </select>
-                    <button class="btn btn-primary">Filter</button>
+                    <?php if ($curriculum_program > 0 || $curriculum_year > 0 || $curriculum_semester > 0): ?>
+                    <a href="?view=curriculum" class="filter-reset" title="Reset filters">×</a>
+                    <?php endif; ?>
                 </form>
-                </div>
+            </div>
             <?php endif; ?>
         </div>
 
@@ -580,41 +572,32 @@ if ($selected_program > 0) {
     <?php endif; ?>
 
     <script>
-        // Filter Panel Toggle - Progressive Disclosure
-        function toggleFilters() {
-            const panel = document.getElementById('filterPanel');
-            const btn = document.getElementById('filterToggle');
-            if (panel) {
-                panel.classList.toggle('active');
-                btn.classList.toggle('active');
-            }
-        }
-        
-        function toggleCurrFilters() {
-            const panel = document.getElementById('currFilterPanel');
-            const btn = document.getElementById('currFilterToggle');
-            if (panel) {
-                panel.classList.toggle('active');
-                btn.classList.toggle('active');
-            }
-        }
-        
-        // Auto-open filter panel if filters are active
-        document.addEventListener('DOMContentLoaded', function() {
-            const filterPanel = document.getElementById('filterPanel');
-            const currFilterPanel = document.getElementById('currFilterPanel');
-            
-            // Check if any student filters are active
+        // Inline Filter Functions
+        function applyFilters() {
+            const program = document.getElementById('filterProgram')?.value || 0;
+            const sortField = document.getElementById('sortField')?.value || 'last_name';
             const params = new URLSearchParams(window.location.search);
-            if (params.get('filter_program') > 0 || params.get('sort_field') !== 'last_name' || params.get('sort_order') !== 'asc') {
-                if (filterPanel) filterPanel.classList.add('active');
-            }
+            const sortOrder = params.get('sort_order') || 'asc';
+            const search = params.get('search') || '';
             
-            // Check if any curriculum filters are active
-            if (params.get('curriculum_program') > 0 || params.get('curriculum_year') > 0 || params.get('curriculum_semester') > 0) {
-                if (currFilterPanel) currFilterPanel.classList.add('active');
-            }
-        });
+            let url = '?view=students';
+            if (program > 0) url += '&filter_program=' + program;
+            if (sortField !== 'last_name') url += '&sort_field=' + sortField;
+            if (sortOrder !== 'asc') url += '&sort_order=' + sortOrder;
+            if (search) url += '&search=' + encodeURIComponent(search);
+            
+            window.location.href = url;
+        }
+        
+        function toggleSortOrder() {
+            const params = new URLSearchParams(window.location.search);
+            const currentOrder = params.get('sort_order') || 'asc';
+            const newOrder = currentOrder === 'asc' ? 'desc' : 'asc';
+            
+            params.set('sort_order', newOrder);
+            params.set('view', 'students');
+            window.location.href = '?' + params.toString();
+        }
         
         // Success Modal - close on click anywhere
         function closeSuccessModal() {
@@ -908,6 +891,7 @@ function renderFinanceChart(fin) {
     });
 }
 </script>
+
 </body>
 </html>
 
