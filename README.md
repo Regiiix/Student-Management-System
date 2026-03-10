@@ -1,3 +1,5 @@
+<img width="1208" height="1806" alt="student_management_system" src="https://github.com/user-attachments/assets/008aa24a-1869-4877-9022-4ae99075a9d8" />
+
 # Student Management System
 
 A PHP-based web application for managing student records, enrollments, schedules, and grades.
