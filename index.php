@@ -35,6 +35,11 @@ if (isset($_GET['msg'])) {
     }
 }
 
+if (empty($_GET)) {
+    header('Location: landing.php', true, 302);
+    exit;
+}
+
 $view = isset($_GET['view']) ? $_GET['view'] : 'students';
 $sidebar_active = in_array($view, ['programs', 'curriculum'], true) ? 'academics' : 'students';
 

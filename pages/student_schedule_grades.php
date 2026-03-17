@@ -651,24 +651,63 @@ if ($active_tab === 'schedule') {
     $term_gpa_sql = "SELECT e.academic_year, c.year_level as enrolled_year, c.semester,
                             SUM(CASE WHEN e.status = 'Passed' AND e.final_grade IS NOT NULL THEN e.final_grade * c.units ELSE 0 END) as grade_points,
                             SUM(CASE WHEN e.status = 'Passed' AND e.final_grade IS NOT NULL THEN c.units ELSE 0 END) as total_units,
-                            COUNT(e.enrollment_id) as course_count,
-                            SUM(CASE WHEN e.status = 'Passed' THEN 1 ELSE 0 END) as passed_count,
-                            SUM(CASE WHEN e.status = 'Failed' THEN 1 ELSE 0 END) as failed_count
+                            SUM(CASE WHEN e.status = 'Enrolled' OR e.final_grade IS NOT NULL THEN 1 ELSE 0 END) as course_count,
+                            SUM(CASE WHEN e.status = 'Passed' AND e.final_grade IS NOT NULL THEN 1 ELSE 0 END) as passed_count,
+                            SUM(CASE WHEN e.status = 'Failed' AND e.final_grade IS NOT NULL THEN 1 ELSE 0 END) as failed_count,
+                            SUM(CASE WHEN e.final_grade IS NOT NULL THEN 1 ELSE 0 END) as graded_count,
+                            SUM(CASE WHEN e.status = 'Enrolled' THEN 1 ELSE 0 END) as in_progress_count
                      FROM enrollments e
                      JOIN curriculum c ON e.curriculum_id = c.curriculum_id
-                     WHERE e.student_id = ?
-                     GROUP BY e.academic_year, c.year_level, c.semester
-                     ORDER BY e.academic_year, c.year_level, c.semester";
-    $term_result = db_query($conn, $term_gpa_sql, 'i', [$student_id]);
+                     WHERE e.student_id = ?";
+    $term_params = [$student_id];
+    $term_types = 'i';
+
+    if (!$is_all_terms) {
+        $term_gpa_sql .= " AND e.academic_year = ?";
+        $term_params[] = $selected_ay;
+        $term_types .= 's';
+    }
+
+    if ($selected_year > 0) {
+        $term_gpa_sql .= " AND c.year_level = ?";
+        $term_params[] = $selected_year;
+        $term_types .= 'i';
+    }
+
+    if ($selected_semester > 0) {
+        $term_gpa_sql .= " AND c.semester = ?";
+        $term_params[] = $selected_semester;
+        $term_types .= 'i';
+    }
+
+    $term_gpa_sql .= " GROUP BY e.academic_year, c.year_level, c.semester
+                       ORDER BY e.academic_year, c.year_level, c.semester";
+    $term_result = db_query($conn, $term_gpa_sql, $term_types, $term_params);
     $term_gpa_history = $term_result ? db_fetch_all($term_result) : [];
     
     // Calculate GPA for each term
-    foreach ($term_gpa_history as &$term) {
-        $term['term_gpa'] = $term['total_units'] > 0 
-            ? round($term['grade_points'] / $term['total_units'], 2) 
+    $normalized_term_history = [];
+    foreach ($term_gpa_history as $term) {
+        $term['course_count'] = (int)($term['course_count'] ?? 0);
+        $term['passed_count'] = (int)($term['passed_count'] ?? 0);
+        $term['failed_count'] = (int)($term['failed_count'] ?? 0);
+        $term['graded_count'] = (int)($term['graded_count'] ?? 0);
+        $term['in_progress_count'] = (int)($term['in_progress_count'] ?? 0);
+        $term['total_units'] = (int)($term['total_units'] ?? 0);
+        $term['grade_points'] = (float)($term['grade_points'] ?? 0);
+
+        // Ignore orphaned term rows where no active enrollment and no graded record exists.
+        if ($term['course_count'] <= 0) {
+            continue;
+        }
+
+        $term['term_gpa'] = $term['total_units'] > 0
+            ? round($term['grade_points'] / $term['total_units'], 2)
             : null;
+
+        $normalized_term_history[] = $term;
     }
-    unset($term);
+    $term_gpa_history = $normalized_term_history;
     
     // Get academic standing history
     $standing_history_sql = "SELECT * FROM academic_standings 
@@ -682,9 +721,9 @@ if ($active_tab === 'schedule') {
                         (SELECT COUNT(*) FROM curriculum WHERE program_id = ?) as total_courses,
                         (SELECT SUM(units) FROM curriculum WHERE program_id = ?) as total_units,
                         (SELECT COUNT(*) FROM enrollments e JOIN curriculum c ON e.curriculum_id = c.curriculum_id 
-                         WHERE e.student_id = ? AND e.status = 'Passed') as completed_courses,
+                         WHERE e.student_id = ? AND e.status = 'Passed' AND e.final_grade IS NOT NULL) as completed_courses,
                         (SELECT SUM(c.units) FROM enrollments e JOIN curriculum c ON e.curriculum_id = c.curriculum_id 
-                         WHERE e.student_id = ? AND e.status = 'Passed') as completed_units";
+                         WHERE e.student_id = ? AND e.status = 'Passed' AND e.final_grade IS NOT NULL) as completed_units";
     $progress_result = db_query($conn, $progress_sql, 'iiii', [$student['program_id'], $student['program_id'], $student_id, $student_id]);
     $progress = $progress_result ? db_fetch_one($progress_result) : null;
 
@@ -1357,7 +1396,13 @@ if (!$is_ajax) {
                                         <td><?php echo htmlspecialchars($term['academic_year']); ?></td>
                                         <td class="center">Year <?php echo $term['enrolled_year']; ?></td>
                                         <td class="center">Sem <?php echo $term['semester']; ?></td>
-                                        <td class="center"><?php echo $term['passed_count']; ?>/<?php echo $term['course_count']; ?> passed</td>
+                                        <td class="center">
+                                            <?php if ($term['graded_count'] > 0): ?>
+                                                <?php echo $term['passed_count']; ?>/<?php echo $term['graded_count']; ?> passed
+                                            <?php else: ?>
+                                                0/<?php echo $term['course_count']; ?> graded
+                                            <?php endif; ?>
+                                        </td>
                                         <td class="center"><?php echo $term['total_units'] ?? 0; ?> units</td>
                                         <td class="center">
                                             <?php if ($term['term_gpa'] !== null): ?>
@@ -1383,8 +1428,12 @@ if (!$is_ajax) {
                                             ?>
                                         </td>
                                         <td class="center">
-                                            <?php if ($term['failed_count'] > 0): ?>
+                                            <?php if ($term['graded_count'] <= 0): ?>
+                                                <em>In Progress</em>
+                                            <?php elseif ($term['failed_count'] > 0): ?>
                                                 <span class="term-status-failed"><?php echo $term['failed_count']; ?> failed</span>
+                                            <?php elseif ($term['in_progress_count'] > 0): ?>
+                                                <em>In Progress</em>
                                             <?php else: ?>
                                                 <span class="term-status-passed">All passed</span>
                                             <?php endif; ?>

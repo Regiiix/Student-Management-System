@@ -20,6 +20,7 @@ if (!function_exists('getAppRouteMap')) {
         $basePath = normalizeAppBasePath($basePath);
 
         return [
+            'landing' => $basePath . 'landing.php',
             'students' => $basePath . 'index.php?view=students',
             'academics' => $basePath . 'index.php?view=programs',
             'curriculum' => $basePath . 'index.php?view=curriculum',
@@ -190,6 +191,11 @@ if (!function_exists('renderAppSidebar')) {
             <i class="bi bi-list" aria-hidden="true"></i>
             <span>Menu</span>
         </button>
+
+        <a href="<?php echo htmlspecialchars($routes['landing']); ?>" class="sidebar-return-link" aria-label="Back to landing page">
+            <i class="bi bi-house-door-fill" aria-hidden="true"></i>
+            <span>Landing</span>
+        </a>
 
         <div class="sidebar-backdrop" data-sidebar-backdrop></div>
 
