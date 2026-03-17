@@ -1,5 +1,7 @@
 <?php
 require_once '../config/db_helpers.php';
+require_once '../config/sidebar.php';
+require_once '../config/csrf_helpers.php';
 
 $student_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 if ($student_id <= 0) {
@@ -10,6 +12,7 @@ if ($student_id <= 0) {
 $conn = getDBConnection();
 $message = '';
 $message_type = '';
+$csrf_scope = 'edit_student_' . $student_id;
 
 // Get student data
 $sql = "SELECT s.*, p.program_name, p.program_code 
@@ -31,18 +34,22 @@ $programs = getCachedPrograms($conn);
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $first_name = trim($_POST['first_name'] ?? '');
-    $middle_name = trim($_POST['middle_name'] ?? '');
-    $last_name = trim($_POST['last_name'] ?? '');
-    $email = trim($_POST['email'] ?? '');
-    $date_of_birth = $_POST['date_of_birth'] ?? '';
-    $gender = $_POST['gender'] ?? '';
-    $address = trim($_POST['address'] ?? '');
-    $phone = trim($_POST['phone'] ?? '');
-    $program_id = intval($_POST['program_id'] ?? 0);
-    $year_level = intval($_POST['year_level'] ?? 1);
-    $current_semester = intval($_POST['current_semester'] ?? 1);
-    $status = $_POST['status'] ?? 'Active';
+    if (!csrf_validate_request_token($csrf_scope, 'csrf_token', false)) {
+        $message = 'Invalid or expired security token. Please refresh and try again.';
+        $message_type = 'error';
+    } else {
+        $first_name = trim($_POST['first_name'] ?? '');
+        $middle_name = trim($_POST['middle_name'] ?? '');
+        $last_name = trim($_POST['last_name'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $date_of_birth = $_POST['date_of_birth'] ?? '';
+        $gender = $_POST['gender'] ?? '';
+        $address = trim($_POST['address'] ?? '');
+        $phone = trim($_POST['phone'] ?? '');
+        $program_id = intval($_POST['program_id'] ?? 0);
+        $year_level = intval($_POST['year_level'] ?? 1);
+        $current_semester = intval($_POST['current_semester'] ?? 1);
+        $status = $_POST['status'] ?? 'Active';
     
     // Validation
     $errors = [];
@@ -134,70 +141,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    if (empty($errors) && !$requires_confirmation) {
-        $update_sql = "UPDATE students SET 
-                       first_name = ?, middle_name = ?, last_name = ?, email = ?, 
-                       date_of_birth = ?, gender = ?, address = ?, phone = ?, 
-                       program_id = ?, year_level = ?, current_semester = ?, status = ?
-                       WHERE student_id = ?";
-        $stmt = $conn->prepare($update_sql);
-        if ($stmt) {
-            $stmt->bind_param('ssssssssiiisi', $first_name, $middle_name, $last_name, $email, 
-                              $date_of_birth, $gender, $address, $phone, 
-                              $program_id, $year_level, $current_semester, $status, $student_id);
-            if ($stmt->execute()) {
-                $message = 'Student information updated successfully!';
-                $message_type = 'success';
+        if (empty($errors) && !$requires_confirmation) {
+            $update_sql = "UPDATE students SET 
+                           first_name = ?, middle_name = ?, last_name = ?, email = ?, 
+                           date_of_birth = ?, gender = ?, address = ?, phone = ?, 
+                           program_id = ?, year_level = ?, current_semester = ?, status = ?
+                           WHERE student_id = ?";
+            $stmt = $conn->prepare($update_sql);
+            if ($stmt) {
+                $stmt->bind_param('ssssssssiiisi', $first_name, $middle_name, $last_name, $email, 
+                                  $date_of_birth, $gender, $address, $phone, 
+                                  $program_id, $year_level, $current_semester, $status, $student_id);
+                if ($stmt->execute()) {
+                    $message = 'Student information updated successfully!';
+                    $message_type = 'success';
 
-                // Handle Balance Forwarding if applicable
-                if ($forward_balance_amount > 0 && !empty($source_term)) {
-                    // Get New Academic Year (re-fetch if needed, or assume sys_ay)
-                    $set_res = db_query($conn, "SELECT setting_value FROM system_settings WHERE setting_key = 'current_academic_year'");
-                    $sys_ay = db_fetch_one($set_res)['setting_value'] ?? (date('Y') . '-' . (date('Y') + 1));
-                    $target_ay = $sys_ay;
+                    // Handle Balance Forwarding if applicable
+                    if ($forward_balance_amount > 0 && !empty($source_term)) {
+                        // Get New Academic Year (re-fetch if needed, or assume sys_ay)
+                        $set_res = db_query($conn, "SELECT setting_value FROM system_settings WHERE setting_key = 'current_academic_year'");
+                        $sys_ay = db_fetch_one($set_res)['setting_value'] ?? (date('Y') . '-' . (date('Y') + 1));
+                        $target_ay = $sys_ay;
 
-                    $target_yl = intval($_POST['year_level']);
-                    $target_sem = intval($_POST['current_semester']);
-                    
-                    // Smart AY Promotion: If moving to next year or resetting from sem 2 to 1
-                    if ($target_yl > intval($student['year_level']) || (intval($student['current_semester'] ?? 1) == 2 && $target_sem == 1)) {
-                        $target_ay = getNextAcademicYear($sys_ay);
+                        $target_yl = intval($_POST['year_level']);
+                        $target_sem = intval($_POST['current_semester']);
+                        
+                        // Smart AY Promotion: If moving to next year or resetting from sem 2 to 1
+                        if ($target_yl > intval($student['year_level']) || (intval($student['current_semester'] ?? 1) == 2 && $target_sem == 1)) {
+                            $target_ay = getNextAcademicYear($sys_ay);
+                        }
+                        
+                        // 1. Credit old term
+                        $target_yl = intval($_POST['year_level']);
+                        $target_sem = intval($_POST['current_semester']);
+                        
+                        $credit_note = "Balance forwarded to Year " . $target_yl . " Sem " . $target_sem;
+                        $ins_credit = "INSERT INTO payments (student_id, amount, academic_year, semester, notes) VALUES (?, ?, ?, ?, ?)";
+                        db_query($conn, $ins_credit, 'idiss', [$student_id, $forward_balance_amount, $source_term['ay'], $source_term['sem'], $credit_note]);
+                        
+                        // 2. Debit new term
+                        $debit_note = "Balance forwarded from Year " . $source_term['yl'] . " Sem " . $source_term['sem'];
+                        db_query($conn, $ins_credit, 'idiss', [$student_id, -$forward_balance_amount, $target_ay, $target_sem, $debit_note]);
+                        
+                        $message .= " (Forwarded Php " . number_format($forward_balance_amount, 2) . ")";
                     }
-                    
-                    // 1. Credit old term
-                    $target_yl = intval($_POST['year_level']);
-                    $target_sem = intval($_POST['current_semester']);
-                    
-                    $credit_note = "Balance forwarded to Year " . $target_yl . " Sem " . $target_sem;
-                    $ins_credit = "INSERT INTO payments (student_id, amount, academic_year, semester, notes) VALUES (?, ?, ?, ?, ?)";
-                    db_query($conn, $ins_credit, 'idiss', [$student_id, $forward_balance_amount, $source_term['ay'], $source_term['sem'], $credit_note]);
-                    
-                    // 2. Debit new term
-                    $debit_note = "Balance forwarded from Year " . $source_term['yl'] . " Sem " . $source_term['sem'];
-                    db_query($conn, $ins_credit, 'idiss', [$student_id, -$forward_balance_amount, $target_ay, $target_sem, $debit_note]);
-                    
-                    $message .= " (Forwarded Php " . number_format($forward_balance_amount, 2) . ")";
-                }
 
-                // Refresh student data
-                $result = db_query($conn, $sql, 'i', [$student_id]);
-                $student = db_fetch_one($result);
+                    // Refresh student data
+                    $result = db_query($conn, $sql, 'i', [$student_id]);
+                    $student = db_fetch_one($result);
+                } else {
+                    $message = 'Error updating student: ' . $stmt->error;
+                    $message_type = 'error';
+                }
+                $stmt->close();
             } else {
-                $message = 'Error updating student: ' . $stmt->error;
+                $message = 'Error preparing update: ' . $conn->error;
                 $message_type = 'error';
             }
-            $stmt->close();
-        } else {
-            $message = 'Error preparing update: ' . $conn->error;
+        } elseif (!empty($errors)) {
+            $message = implode('<br>', $errors);
             $message_type = 'error';
         }
-    } elseif (!empty($errors)) {
-        $message = implode('<br>', $errors);
-        $message_type = 'error';
     }
 }
 
 $conn->close();
+
+$student_list_url = getStudentListReturnUrl('..');
+$view_info_url = appendReturnParam('student_personal.php?id=' . $student_id, $student_list_url);
+$grades_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id . '&tab=grades', $student_list_url);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -205,212 +217,29 @@ $conn->close();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Edit Student - <?php echo htmlspecialchars($student['first_name'] . ' ' . $student['last_name']); ?></title>
-    <link rel="stylesheet" href="../css/common.css">
-    <link rel="stylesheet" href="../css/enhancements.css">
-    <link rel="stylesheet" href="../css/details.css">
-    <script src="../js/app.js" defer></script>
-    <style>
-        .edit-student-form {
-            max-width: 700px;
-            margin: 0 auto;
-        }
-        .form-row {
-            display: flex;
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-        .form-group {
-            flex: 1;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 6px;
-            font-weight: 500;
-            color: #495057;
-            font-size: 14px;
-        }
-        .form-group input,
-        .form-group select,
-        .form-group textarea {
-            width: 100%;
-            padding: 10px 12px;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
-            font-size: 14px;
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        .form-group input:focus,
-        .form-group select:focus,
-        .form-group textarea:focus {
-            outline: none;
-            border-color: #0066cc;
-            box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
-        }
-        .form-group textarea {
-            resize: vertical;
-            min-height: 80px;
-        }
-        .form-group input:disabled {
-            background: #e9ecef;
-            cursor: not-allowed;
-        }
-        .form-section {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 25px;
-        }
-        .form-section h3 {
-            margin: 0 0 15px 0;
-            font-size: 16px;
-            color: #343a40;
-            border-bottom: 1px solid #dee2e6;
-            padding-bottom: 10px;
-        }
-        .form-actions {
-            display: flex;
-            gap: 15px;
-            justify-content: flex-end;
-            margin-top: 25px;
-            padding-top: 20px;
-            border-top: 1px solid #e9ecef;
-        }
-        .form-actions .btn {
-            padding: 12px 30px;
-            font-size: 15px;
-        }
-        .message {
-            padding: 15px 20px;
-            border-radius: 8px;
-            margin-bottom: 25px;
-            font-size: 14px;
-        }
-        .message.success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        .message.error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        .required {
-            color: #dc3545;
-        }
-        .student-number-display {
-            background: #e9ecef;
-            padding: 10px 12px;
-            border-radius: 6px;
-            font-weight: 600;
-            color: #495057;
-        }
-
-        /* Modal Styles */
-        .modal-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.4);
-            backdrop-filter: blur(4px);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
-        .modal-overlay.active {
-            display: flex;
-            opacity: 1;
-        }
-        .modal-container {
-            background: #fff;
-            width: 100%;
-            max-width: 500px;
-            border-radius: 12px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
-            overflow: hidden;
-            transform: translateY(20px);
-            transition: transform 0.3s ease;
-        }
-        .modal-overlay.active .modal-container {
-            transform: translateY(0);
-        }
-        .modal-header {
-            background: #f8f9fa;
-            padding: 20px;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            border-bottom: 1px solid #eee;
-        }
-        .modal-header h3 {
-            margin: 0;
-            color: #333;
-            font-size: 18px;
-        }
-        .modal-icon {
-            width: 40px;
-            height: 40px;
-            background: #fff3cd;
-            color: #856404;
-            border-radius: 50%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            font-size: 20px;
-            flex-shrink: 0;
-        }
-        .modal-body {
-            padding: 25px 20px;
-            line-height: 1.6;
-            color: #444;
-            font-size: 15px;
-        }
-        .modal-footer {
-            padding: 15px 20px;
-            background: #f8f9fa;
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-            border-top: 1px solid #eee;
-        }
-        .btn-confirm {
-            background: #0066cc;
-            color: white;
-            padding: 10px 20px;
-            border-radius: 6px;
-            font-weight: 500;
-            transition: background 0.2s;
-        }
-        .btn-confirm:hover {
-            background: #0052a3;
-        }
-        .btn-cancel {
-            background: #e9ecef;
-            color: #495057;
-            padding: 10px 20px;
-            border-radius: 6px;
-            font-weight: 500;
-        }
-        .btn-cancel:hover {
-            background: #dee2e6;
-        }
-    </style>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css', '../')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/details.css', '../')); ?>">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <script src="<?php echo htmlspecialchars(app_asset('js/app.js', '../')); ?>" defer></script>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/forms_bundle.css', '../')); ?>">
 </head>
-<body>
+<body class="has-sidebar page-edit-student">
+    <?php renderAppSidebar(['active' => 'students', 'basePath' => '..']); ?>
     <div class="container">
         <header>
             <h1>Edit Student</h1>
             <div class="header-actions">
-                <a href="../index.php" class="btn btn-back">← Back to Student List</a>
-                <a href="student_personal.php?id=<?php echo $student_id; ?>" class="btn btn-info">View Info</a>
-                <a href="student_schedule_grades.php?id=<?php echo $student_id; ?>&tab=grades" class="btn btn-grades">Grades</a>
+                <a href="<?php echo htmlspecialchars($student_list_url); ?>" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Student List</a>
+                <a href="<?php echo htmlspecialchars($view_info_url); ?>" class="btn btn-info"><i class="bi bi-person-vcard" aria-hidden="true"></i>View Info</a>
+                <a href="<?php echo htmlspecialchars($grades_url); ?>" class="btn btn-grades"><i class="bi bi-journal-check" aria-hidden="true"></i>Grades</a>
             </div>
         </header>
+
+        <?php renderPageBreadcrumbs([
+            ['label' => 'Students', 'href' => $student_list_url],
+            ['label' => 'Student Profile', 'href' => $view_info_url],
+            ['label' => 'Edit Student']
+        ]); ?>
 
         <?php if ($message): ?>
             <div class="message <?php echo $message_type; ?>">
@@ -430,8 +259,8 @@ $conn->close();
                             </p>
                         </div>
                         <div class="modal-footer">
-                            <button type="button" onclick="closePromoModal()" class="btn-cancel">Cancel</button>
-                            <button type="button" onclick="confirmPromotion()" class="btn-confirm">Proceed & Forward Balance</button>
+                            <button type="button" data-promo-action="cancel" class="btn-cancel">Cancel</button>
+                            <button type="button" data-promo-action="confirm" class="btn-confirm">Proceed & Forward Balance</button>
                         </div>
                     </div>
                 </div>
@@ -440,6 +269,7 @@ $conn->close();
 
         <div class="student-details">
             <form method="post" class="edit-student-form">
+                <?php echo csrf_token_field($csrf_scope); ?>
                 <!-- Student Number (Read-only) -->
                 <div class="form-section">
                     <h3>Student Identification</h3>
@@ -542,7 +372,7 @@ $conn->close();
                 </div>
 
                 <div class="form-actions">
-                    <a href="student_personal.php?id=<?php echo $student_id; ?>" class="btn btn-back">Cancel</a>
+                    <a href="<?php echo htmlspecialchars($view_info_url); ?>" class="btn btn-back">Cancel</a>
                     <button type="submit" class="btn btn-add">Save Changes</button>
                 </div>
             </form>
@@ -588,6 +418,20 @@ $conn->close();
                 setTimeout(() => modal.style.display = 'none', 300);
             }
         }
+
+        document.addEventListener('click', function(event) {
+            const actionButton = event.target.closest('[data-promo-action]');
+            if (!actionButton) {
+                return;
+            }
+
+            const action = actionButton.getAttribute('data-promo-action');
+            if (action === 'confirm') {
+                confirmPromotion();
+            } else if (action === 'cancel') {
+                closePromoModal();
+            }
+        });
     </script>
 
 </body>

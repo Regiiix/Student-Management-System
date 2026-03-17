@@ -1,5 +1,6 @@
 <?php
 require_once '../config/db_helpers.php';
+require_once '../config/sidebar.php';
 
 $student_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 if ($student_id <= 0) {
@@ -22,6 +23,10 @@ if (!$result || $result->num_rows === 0) {
 }
 $student = db_fetch_one($result);
 $conn->close();
+
+$student_list_url = getStudentListReturnUrl('..');
+$records_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id . '&tab=schedule', $student_list_url);
+$edit_student_url = appendReturnParam('edit_student.php?id=' . $student_id, $student_list_url);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -29,22 +34,29 @@ $conn->close();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Personal Information - <?php echo htmlspecialchars($student['first_name'] . ' ' . $student['last_name']); ?></title>
-    <link rel="stylesheet" href="../css/common.css">
-    <link rel="stylesheet" href="../css/enhancements.css">
-    <link rel="stylesheet" href="../css/details.css">
-    <script src="../js/app.js" defer></script>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css', '../')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/details.css', '../')); ?>">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <script src="<?php echo htmlspecialchars(app_asset('js/app.js', '../')); ?>" defer></script>
 </head>
-<body>
+<body class="has-sidebar">
+    <?php renderAppSidebar(['active' => 'students', 'basePath' => '..']); ?>
     <div class="container">
         <header>
             <h1>Personal Information</h1>
             <div class="header-actions">
-                <a href="../index.php" class="btn btn-back">← Back to Student List</a>
-                <a href="edit_student.php?id=<?php echo $student_id; ?>" class="btn btn-edit">Edit Info</a>
-                <a href="student_schedule_grades.php?id=<?php echo $student_id; ?>&tab=schedule" class="btn btn-schedule">Records</a>
+                <a href="<?php echo htmlspecialchars($student_list_url); ?>" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Student List</a>
+                <a href="<?php echo htmlspecialchars($edit_student_url); ?>" class="btn btn-edit"><i class="bi bi-pencil-square" aria-hidden="true"></i>Edit Info</a>
+                <a href="<?php echo htmlspecialchars($records_url); ?>" class="btn btn-schedule"><i class="bi bi-journal-text" aria-hidden="true"></i>Records</a>
 
             </div>
         </header>
+
+        <?php renderPageBreadcrumbs([
+            ['label' => 'Students', 'href' => $student_list_url],
+            ['label' => 'Records', 'href' => $records_url],
+            ['label' => 'Personal Information']
+        ]); ?>
 
         <div class="student-details">
             <div class="student-name-header">

@@ -1,9 +1,12 @@
 <?php
 require_once '../config/db_helpers.php';
+require_once '../config/csrf_helpers.php';
+require_once '../config/api_response_helpers.php';
 
 $conn = getDBConnection();
 $message = '';
 $message_type = '';
+$csrf_scope = 'enrollment_management';
 
 // Current date context: February 24, 2026
 // Current academic year is 2025-2026
@@ -23,8 +26,6 @@ $max_allowed_year_start = $current_academic_year_start + 3;
 
 // Handle AJAX request for recent students
 if (isset($_GET['action']) && $_GET['action'] === 'get_recent_students') {
-    header('Content-Type: application/json');
-    
     $recent_sql = "SELECT s.student_id, s.student_number, s.first_name, s.last_name, 
                           p.program_code
                    FROM students s 
@@ -32,26 +33,28 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_recent_students') {
                    ORDER BY s.created_at DESC 
                    LIMIT 10";
     $recent_result = db_query($conn, $recent_sql);
+    if ($recent_result === false) {
+        $conn->close();
+        api_respond_error('Unable to load recent students', 500, 'recent_students_query_failed');
+    }
+
     $recent_students = db_fetch_all($recent_result);
-    
-    echo json_encode([
-        'success' => true,
-        'students' => $recent_students
-    ]);
+
     $conn->close();
-    exit;
+    api_respond_success([
+        'students' => $recent_students,
+    ], 200, ['action' => 'get_recent_students']);
 }
 
 // Handle AJAX request for student lookup
 if (isset($_GET['action']) && $_GET['action'] === 'lookup_student') {
-    header('Content-Type: application/json');
     $student_number = trim($_GET['student_number'] ?? '');
-    
+
     if (empty($student_number)) {
-        echo json_encode(['success' => false, 'error' => 'Student number is required']);
-        exit;
+        $conn->close();
+        api_respond_error('Student number is required', 422, 'missing_student_number');
     }
-    
+
     $student_sql = "SELECT s.student_id, s.student_number, s.first_name, s.middle_name, s.last_name, 
                            s.program_id, s.year_level, s.current_semester,
                            p.program_code, p.program_name
@@ -59,17 +62,21 @@ if (isset($_GET['action']) && $_GET['action'] === 'lookup_student') {
                     LEFT JOIN programs p ON s.program_id = p.program_id 
                     WHERE s.student_number = ?";
     $student_result = db_query($conn, $student_sql, 's', [$student_number]);
+    if ($student_result === false) {
+        $conn->close();
+        api_respond_error('Unable to look up student', 500, 'student_lookup_query_failed');
+    }
+
     $student = db_fetch_one($student_result);
-    
+
     if ($student) {
         $full_name = $student['first_name'];
         if (!empty($student['middle_name'])) {
             $full_name .= ' ' . $student['middle_name'];
         }
         $full_name .= ' ' . $student['last_name'];
-        
-        echo json_encode([
-            'success' => true,
+
+        $payload = [
             'student' => [
                 'id' => $student['student_id'],
                 'student_number' => $student['student_number'],
@@ -80,24 +87,25 @@ if (isset($_GET['action']) && $_GET['action'] === 'lookup_student') {
                 'year_level' => $student['year_level'],
                 'current_semester' => $student['current_semester']
             ]
-        ]);
+        ];
+
+        $conn->close();
+        api_respond_success($payload, 200, ['action' => 'lookup_student']);
     } else {
-        echo json_encode(['success' => false, 'error' => 'Student not found']);
+        $conn->close();
+        api_respond_error('Student not found', 404, 'student_not_found', ['student_number' => $student_number]);
     }
-    $conn->close();
-    exit;
 }
 
 // Handle AJAX request for schedule lookup
 if (isset($_GET['action']) && $_GET['action'] === 'lookup_schedule') {
-    header('Content-Type: application/json');
     $schedule_id = intval($_GET['schedule_id'] ?? 0);
-    
+
     if ($schedule_id <= 0) {
-        echo json_encode(['success' => false, 'error' => 'Invalid schedule ID']);
-        exit;
+        $conn->close();
+        api_respond_error('Invalid schedule ID', 422, 'invalid_schedule_id');
     }
-    
+
     $schedule_sql = "SELECT s.schedule_id, s.day_of_week, s.start_time, s.end_time, s.room, 
                             s.capacity, s.enrolled_count, s.curriculum_id,
                             c.course_code, c.course_name, c.units, c.year_level, c.semester,
@@ -111,11 +119,15 @@ if (isset($_GET['action']) && $_GET['action'] === 'lookup_schedule') {
                      LEFT JOIN program_tuition_rates ptr ON p.program_id = ptr.program_id AND ptr.is_active = 1
                      WHERE s.schedule_id = ?";
     $schedule_result = db_query($conn, $schedule_sql, 'i', [$schedule_id]);
+    if ($schedule_result === false) {
+        $conn->close();
+        api_respond_error('Unable to look up schedule', 500, 'schedule_lookup_query_failed');
+    }
+
     $schedule = db_fetch_one($schedule_result);
-    
+
     if ($schedule) {
-        echo json_encode([
-            'success' => true,
+        $payload = [
             'schedule' => [
                 'schedule_id' => $schedule['schedule_id'],
                 'curriculum_id' => $schedule['curriculum_id'],
@@ -135,29 +147,30 @@ if (isset($_GET['action']) && $_GET['action'] === 'lookup_schedule') {
                 'semester' => $schedule['semester'],
                 'tuition_per_unit' => $schedule['tuition_per_unit']
             ]
-        ]);
+        ];
+
+        $conn->close();
+        api_respond_success($payload, 200, ['action' => 'lookup_schedule']);
     } else {
-        echo json_encode(['success' => false, 'error' => 'Schedule not found']);
+        $conn->close();
+        api_respond_error('Schedule not found', 404, 'schedule_not_found', ['schedule_id' => $schedule_id]);
     }
-    $conn->close();
-    exit;
 }
 
 // Handle AJAX request for filtered schedule suggestions
 if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
-    header('Content-Type: application/json');
     $program_id = intval($_GET['program_id'] ?? 0);
     $year_level = intval($_GET['year_level'] ?? 0);
     $semester = intval($_GET['semester'] ?? 0);
     $search = trim($_GET['search'] ?? '');
     $student_id = intval($_GET['student_id'] ?? 0);
     $academic_year = trim($_GET['academic_year'] ?? '');
-    
+
     if ($program_id <= 0) {
-        echo json_encode(['success' => false, 'error' => 'Program is required']);
-        exit;
+        $conn->close();
+        api_respond_error('Program is required', 422, 'missing_program_id');
     }
-    
+
     // Build query with GROUP BY to consolidate multiple day entries per course
     // Uses MIN(schedule_id) as representative ID and GROUP_CONCAT for days/times
     $sql = "SELECT MIN(s.schedule_id) as schedule_id, 
@@ -187,10 +200,15 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
     
     $sql .= " GROUP BY s.curriculum_id, c.course_code, c.course_name, c.units, c.year_level, c.semester";
     $sql .= " ORDER BY c.course_code";
-    
+
     $result = db_query($conn, $sql, $types, $params);
+    if ($result === false) {
+        $conn->close();
+        api_respond_error('Unable to load schedule suggestions', 500, 'schedule_suggestions_query_failed');
+    }
+
     $schedules = db_fetch_all($result);
-    
+
     // Check enrollment status for each course if student_id is provided
     if ($student_id > 0) {
         // Get ALL courses student is currently enrolled in (any academic year with status 'Enrolled')
@@ -198,6 +216,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
                          FROM enrollments e
                          WHERE e.student_id = ? AND e.status = 'Enrolled'";
         $enrolled_result = db_query($conn, $enrolled_sql, 'i', [$student_id]);
+        if ($enrolled_result === false) {
+            $conn->close();
+            api_respond_error('Unable to load enrolled courses', 500, 'enrolled_courses_query_failed');
+        }
+
         $enrolled_courses = [];
         if ($enrolled_result && $enrolled_result !== true) {
             while ($row = mysqli_fetch_assoc($enrolled_result)) {
@@ -210,6 +233,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
                        FROM enrollments e
                        WHERE e.student_id = ? AND e.status = 'Passed'";
         $passed_result = db_query($conn, $passed_sql, 'i', [$student_id]);
+        if ($passed_result === false) {
+            $conn->close();
+            api_respond_error('Unable to load passed courses', 500, 'passed_courses_query_failed');
+        }
+
         $passed_courses = [];
         if ($passed_result && $passed_result !== true) {
             while ($row = mysqli_fetch_assoc($passed_result)) {
@@ -222,6 +250,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
                        FROM enrollments e
                        WHERE e.student_id = ? AND e.status = 'Failed'";
         $failed_result = db_query($conn, $failed_sql, 'i', [$student_id]);
+        if ($failed_result === false) {
+            $conn->close();
+            api_respond_error('Unable to load failed courses', 500, 'failed_courses_query_failed');
+        }
+
         $failed_courses = [];
         if ($failed_result && $failed_result !== true) {
             while ($row = mysqli_fetch_assoc($failed_result)) {
@@ -243,161 +276,220 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
             }
         }
     }
-    
-    echo json_encode([
-        'success' => true,
-        'schedules' => $schedules
-    ]);
+
     $conn->close();
-    exit;
+    api_respond_success([
+        'schedules' => $schedules,
+        'count' => count($schedules),
+    ], 200, [
+        'action' => 'get_schedule_suggestions',
+        'program_id' => $program_id,
+        'year_level' => $year_level,
+        'semester' => $semester,
+        'academic_year' => $academic_year,
+        'search' => $search,
+    ]);
 }
 
 // Handle AJAX request to enroll a subject
 if (isset($_GET['action']) && $_GET['action'] === 'enroll_subject') {
-    header('Content-Type: application/json');
+    if (!csrf_validate_request_token($csrf_scope, 'csrf_token', false)) {
+        $conn->close();
+        api_respond_error('Invalid or missing CSRF token', 403, 'csrf_token_invalid');
+    }
+
     $student_id = intval($_GET['student_id'] ?? 0);
     $schedule_id = intval($_GET['schedule_id'] ?? 0);
     $academic_year = trim($_GET['academic_year'] ?? '');
-    
+
     if ($student_id <= 0 || $schedule_id <= 0 || empty($academic_year)) {
-        echo json_encode(['success' => false, 'error' => 'Missing required parameters']);
-        exit;
+        $conn->close();
+        api_respond_error('Missing required parameters', 422, 'missing_required_parameters', [
+            'required' => ['student_id', 'schedule_id', 'academic_year'],
+        ]);
     }
-    
+
     // Get curriculum_id from schedule
-    $sched_info = db_fetch_one(db_query($conn, "SELECT curriculum_id, capacity, enrolled_count FROM schedules WHERE schedule_id = ?", 'i', [$schedule_id]));
-    
-    if (!$sched_info) {
-        echo json_encode(['success' => false, 'error' => 'Schedule not found']);
-        exit;
+    $sched_result = db_query($conn, "SELECT curriculum_id, capacity, enrolled_count FROM schedules WHERE schedule_id = ?", 'i', [$schedule_id]);
+    if ($sched_result === false) {
+        $conn->close();
+        api_respond_error('Unable to load schedule', 500, 'schedule_query_failed');
     }
-    
+
+    $sched_info = db_fetch_one($sched_result);
+
+    if (!$sched_info) {
+        $conn->close();
+        api_respond_error('Schedule not found', 404, 'schedule_not_found', ['schedule_id' => $schedule_id]);
+    }
+
     $curriculum_id = $sched_info['curriculum_id'];
-    
+
     // Check capacity
     if ($sched_info['enrolled_count'] >= $sched_info['capacity']) {
-        echo json_encode(['success' => false, 'error' => 'This schedule is full']);
-        exit;
+        $conn->close();
+        api_respond_error('This schedule is full', 409, 'schedule_full', ['schedule_id' => $schedule_id]);
     }
-    
+
     // Check if already enrolled
     $check_sql = "SELECT enrollment_id FROM enrollments WHERE student_id = ? AND curriculum_id = ? AND academic_year = ?";
-    $existing = db_fetch_one(db_query($conn, $check_sql, 'iis', [$student_id, $curriculum_id, $academic_year]));
-    
-    if ($existing) {
-        echo json_encode(['success' => false, 'error' => 'Already enrolled in this course']);
-        exit;
+    $check_result = db_query($conn, $check_sql, 'iis', [$student_id, $curriculum_id, $academic_year]);
+    if ($check_result === false) {
+        $conn->close();
+        api_respond_error('Unable to validate enrollment', 500, 'enrollment_check_query_failed');
     }
-    
+
+    $existing = db_fetch_one($check_result);
+
+    if ($existing) {
+        $conn->close();
+        api_respond_error('Already enrolled in this course', 409, 'already_enrolled');
+    }
+
     // Insert enrollment
     $ins_sql = "INSERT INTO enrollments (student_id, curriculum_id, academic_year, status) VALUES (?, ?, ?, 'Enrolled')";
     if (db_query($conn, $ins_sql, 'iis', [$student_id, $curriculum_id, $academic_year])) {
         // Increment enrolled count
         db_query($conn, "UPDATE schedules SET enrolled_count = enrolled_count + 1 WHERE schedule_id = ?", 'i', [$schedule_id]);
-        
+
         // Get course info for response
         $course_info = db_fetch_one(db_query($conn, "SELECT course_code, course_name FROM curriculum WHERE curriculum_id = ?", 'i', [$curriculum_id]));
-        
-        echo json_encode([
-            'success' => true,
-            'message' => 'Successfully enrolled in ' . $course_info['course_code'] . ' - ' . $course_info['course_name']
-        ]);
+
+        $course_label = ($course_info && isset($course_info['course_code'], $course_info['course_name']))
+            ? ($course_info['course_code'] . ' - ' . $course_info['course_name'])
+            : 'the selected course';
+
+        $conn->close();
+        api_respond_success([
+            'message' => 'Successfully enrolled in ' . $course_label,
+            'course' => $course_info,
+        ], 200, ['action' => 'enroll_subject']);
     } else {
-        echo json_encode(['success' => false, 'error' => 'Failed to enroll']);
+        $conn->close();
+        api_respond_error('Failed to enroll', 500, 'enrollment_insert_failed');
     }
-    $conn->close();
-    exit;
 }
 
 // Handle AJAX request for bulk enrollment
 if (isset($_GET['action']) && $_GET['action'] === 'bulk_enroll') {
-    header('Content-Type: application/json');
-    
+    if (!csrf_validate_request_token($csrf_scope, 'csrf_token', false)) {
+        $conn->close();
+        api_respond_error('Invalid or missing CSRF token', 403, 'csrf_token_invalid');
+    }
+
     // Get POST data
     $input = json_decode(file_get_contents('php://input'), true);
-    
+
+    if (!is_array($input)) {
+        $conn->close();
+        api_respond_error('Invalid request payload', 422, 'invalid_request_payload');
+    }
+
     $student_id = intval($input['student_id'] ?? 0);
     $program_id = intval($input['program_id'] ?? 0);
     $academic_year = trim($input['academic_year'] ?? '');
     $semester = intval($input['semester'] ?? 0);
     $schedule_ids = $input['schedule_ids'] ?? [];
-    
+
     if ($student_id <= 0 || $program_id <= 0 || empty($academic_year) || empty($schedule_ids)) {
-        echo json_encode(['success' => false, 'error' => 'Missing required parameters']);
-        exit;
+        $conn->close();
+        api_respond_error('Missing required parameters', 422, 'missing_required_parameters', [
+            'required' => ['student_id', 'program_id', 'academic_year', 'schedule_ids'],
+        ]);
     }
-    
+
     $conn->begin_transaction();
-    
+
     try {
         // Update student's program_id and current_semester
         $update_sql = "UPDATE students SET program_id = ?, current_semester = ? WHERE student_id = ?";
         if (!db_query($conn, $update_sql, 'iii', [$program_id, $semester, $student_id])) {
             throw new Exception('Failed to update student program');
         }
-        
+
         $enrolled_courses = [];
         $errors = [];
-        
+
         foreach ($schedule_ids as $schedule_id) {
             $schedule_id = intval($schedule_id);
-            
+
             // Get schedule info
-            $sched_info = db_fetch_one(db_query($conn, "SELECT s.curriculum_id, s.capacity, s.enrolled_count, c.course_code, c.course_name FROM schedules s JOIN curriculum c ON s.curriculum_id = c.curriculum_id WHERE s.schedule_id = ?", 'i', [$schedule_id]));
-            
+            $sched_query = db_query($conn, "SELECT s.curriculum_id, s.capacity, s.enrolled_count, c.course_code, c.course_name FROM schedules s JOIN curriculum c ON s.curriculum_id = c.curriculum_id WHERE s.schedule_id = ?", 'i', [$schedule_id]);
+            if ($sched_query === false) {
+                $errors[] = "Unable to load schedule $schedule_id";
+                continue;
+            }
+
+            $sched_info = db_fetch_one($sched_query);
+
             if (!$sched_info) {
                 $errors[] = "Schedule $schedule_id not found";
                 continue;
             }
-            
+
             // Check capacity
             if ($sched_info['enrolled_count'] >= $sched_info['capacity']) {
                 $errors[] = "{$sched_info['course_code']} is full";
                 continue;
             }
-            
+
             // Check if already enrolled
             $check_sql = "SELECT enrollment_id FROM enrollments WHERE student_id = ? AND curriculum_id = ? AND academic_year = ?";
-            $existing = db_fetch_one(db_query($conn, $check_sql, 'iis', [$student_id, $sched_info['curriculum_id'], $academic_year]));
-            
+            $existing_query = db_query($conn, $check_sql, 'iis', [$student_id, $sched_info['curriculum_id'], $academic_year]);
+            if ($existing_query === false) {
+                $errors[] = "Unable to validate existing enrollment for {$sched_info['course_code']}";
+                continue;
+            }
+
+            $existing = db_fetch_one($existing_query);
+
             if ($existing) {
                 $errors[] = "Already enrolled in {$sched_info['course_code']}";
                 continue;
             }
-            
+
             // Insert enrollment
             $ins_sql = "INSERT INTO enrollments (student_id, curriculum_id, academic_year, status) VALUES (?, ?, ?, 'Enrolled')";
             if (!db_query($conn, $ins_sql, 'iis', [$student_id, $sched_info['curriculum_id'], $academic_year])) {
                 $errors[] = "Failed to enroll in {$sched_info['course_code']}";
                 continue;
             }
-            
+
             // Update enrolled count for ALL schedule rows of this curriculum (not just the one schedule_id)
             db_query($conn, "UPDATE schedules SET enrolled_count = enrolled_count + 1 WHERE curriculum_id = ?", 'i', [$sched_info['curriculum_id']]);
-            
+
             $enrolled_courses[] = $sched_info['course_code'] . ' - ' . $sched_info['course_name'];
         }
-        
+
         if (count($enrolled_courses) > 0) {
             $conn->commit();
-            echo json_encode([
-                'success' => true,
+
+            $conn->close();
+            api_respond_success([
                 'message' => 'Successfully enrolled in ' . count($enrolled_courses) . ' course(s)',
                 'enrolled' => $enrolled_courses,
                 'errors' => $errors
-            ]);
+            ], 200, ['action' => 'bulk_enroll']);
         } else {
             $conn->rollback();
-            echo json_encode(['success' => false, 'error' => 'No courses enrolled. ' . implode(', ', $errors)]);
+
+            $conn->close();
+            api_respond_error(
+                'No courses enrolled. ' . implode(', ', $errors),
+                409,
+                'no_courses_enrolled',
+                ['errors' => $errors]
+            );
         }
-        
+
     } catch (Exception $e) {
         $conn->rollback();
-        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+
+        $conn->close();
+        api_respond_error('Error processing enrollment', 500, 'bulk_enroll_failed', [
+            'message' => $e->getMessage(),
+        ]);
     }
-    
-    $conn->close();
-    exit;
 }
 
 $conn->close();
@@ -408,724 +500,24 @@ $conn->close();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Enrollment</title>
-    <link rel="stylesheet" href="../css/common.css">
-    <link rel="stylesheet" href="../css/enhancements.css">
-    <link rel="stylesheet" href="../css/details.css">
-    <script src="../js/app.js" defer></script>
-    <style>
-        .enrollment-form {
-            max-width: 800px;
-            margin: 0 auto;
-        }
-        .form-row {
-            display: flex;
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-        .form-group {
-            flex: 1;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 6px;
-            font-weight: 500;
-            color: #495057;
-            font-size: 14px;
-        }
-        .form-group input,
-        .form-group select {
-            width: 100%;
-            padding: 10px 12px;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
-            font-size: 14px;
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        .form-group input:focus,
-        .form-group select:focus {
-            outline: none;
-            border-color: #0066cc;
-            box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
-        }
-        .form-group input:disabled,
-        .form-group select:disabled {
-            background: #e9ecef;
-            cursor: not-allowed;
-        }
-        .form-section {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 25px;
-        }
-        .form-section h3 {
-            margin: 0 0 15px 0;
-            font-size: 16px;
-            color: #343a40;
-            border-bottom: 1px solid #dee2e6;
-            padding-bottom: 10px;
-        }
-        .required { color: #dc3545; }
-        .help-text {
-            font-size: 12px;
-            color: #6c757d;
-            margin-top: 5px;
-        }
-        .current-info {
-            background: #d1ecf1;
-            border: 1px solid #bee5eb;
-            color: #0c5460;
-            padding: 12px 15px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            font-size: 13px;
-        }
-        .hidden { display: none !important; }
-        .student-info-section {
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
-            padding: 15px;
-            border-radius: 6px;
-            margin-top: 15px;
-        }
-        .student-info-section h4 {
-            margin: 0 0 10px 0;
-            color: #155724;
-            font-size: 14px;
-        }
-        .inline-error {
-            color: #721c24;
-            font-size: 13px;
-            margin-top: 10px;
-            padding: 12px 15px;
-            background: #f8d7da;
-            border: 1px solid #f5c6cb;
-            border-radius: 6px;
-        }
-        .term-display {
-            background: #e7f3ff;
-            border: 1px solid #b6d4fe;
-            padding: 10px 15px;
-            border-radius: 6px;
-            margin-top: 10px;
-            font-size: 13px;
-            color: #084298;
-        }
-        /* Modal styles */
-        .modal-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-        }
-        .modal-content {
-            background: #fff;
-            padding: 25px;
-            border-radius: 10px;
-            max-width: 600px;
-            width: 90%;
-            max-height: 80vh;
-            overflow-y: auto;
-        }
-        .modal-header {
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 15px;
-            color: #343a40;
-        }
-        .modal-body {
-            margin-bottom: 20px;
-            color: #495057;
-        }
-        .modal-actions {
-            display: flex;
-            gap: 10px;
-            justify-content: flex-end;
-        }
-        /* Schedule table */
-        .schedule-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-            font-size: 14px;
-        }
-        .schedule-table th, .schedule-table td {
-            padding: 10px 12px;
-            text-align: left;
-            border: 1px solid #dee2e6;
-        }
-        .schedule-table th {
-            background: #f8f9fa;
-            font-weight: 600;
-            color: #495057;
-        }
-        .schedule-table tr:hover {
-            background: #f8f9fa;
-        }
-        /* Pending subjects list */
-        .pending-list {
-            background: #fff3cd;
-            border: 1px solid #ffc107;
-            padding: 15px;
-            border-radius: 6px;
-            margin-top: 15px;
-        }
-        .pending-list h4 {
-            margin: 0 0 10px 0;
-            color: #856404;
-            font-size: 14px;
-        }
-        .pending-item {
-            padding: 8px 12px;
-            border-bottom: 1px solid #ffe69c;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            background: #fff;
-            border-radius: 4px;
-            margin-bottom: 5px;
-        }
-        .pending-item:last-child { margin-bottom: 0; }
-        .pending-item .remove-btn {
-            background: #dc3545;
-            color: #fff;
-            border: none;
-            padding: 4px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-        }
-        .pending-item .remove-btn:hover {
-            background: #c82333;
-        }
-        .enroll-actions {
-            margin-top: 15px;
-            display: flex;
-            gap: 10px;
-        }
-        .btn-enroll-student {
-            background: #007bff;
-            color: #fff;
-            padding: 12px 24px;
-            font-size: 16px;
-            font-weight: 600;
-        }
-        .btn-enroll-student:hover {
-            background: #0056b3;
-        }
-        .btn-enroll-student:disabled {
-            background: #6c757d;
-            cursor: not-allowed;
-        }
-        /* Confirmation modal */
-        .confirm-modal {
-            max-width: 600px;
-        }
-        .confirm-section {
-            background: #f8f9fa;
-            padding: 12px 15px;
-            border-radius: 6px;
-            margin-bottom: 12px;
-        }
-        .confirm-section label {
-            font-weight: 600;
-            color: #495057;
-            font-size: 12px;
-            text-transform: uppercase;
-            display: block;
-            margin-bottom: 5px;
-        }
-        .confirm-section .value {
-            font-size: 16px;
-            color: #212529;
-        }
-        .confirm-subjects {
-            max-height: 200px;
-            overflow-y: auto;
-        }
-        .confirm-subject-item {
-            padding: 8px 0;
-            border-bottom: 1px solid #dee2e6;
-        }
-        .confirm-subject-item:last-child { border-bottom: none; }
-        .schedule-actions {
-            display: flex;
-            gap: 10px;
-            margin-top: 15px;
-        }
-        .btn-add-subject {
-            background: #28a745;
-            color: #fff;
-        }
-        .btn-add-subject:hover {
-            background: #218838;
-        }
-        .btn-toggle {
-            background: #6c757d;
-            color: #fff;
-        }
-        .btn-toggle:hover {
-            background: #5a6268;
-        }
-        /* Autocomplete dropdown */
-        .autocomplete-dropdown {
-            position: absolute;
-            top: 100%;
-            left: 0;
-            right: 0;
-            background: #fff;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
-            max-height: 250px;
-            overflow-y: auto;
-            z-index: 1000;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        }
-        .autocomplete-item {
-            padding: 10px 15px;
-            cursor: pointer;
-            border-bottom: 1px solid #f0f0f0;
-        }
-        .autocomplete-item:hover {
-            background: #e7f3ff;
-        }
-        .autocomplete-item:last-child { border-bottom: none; }
-        .autocomplete-item .schedule-id {
-            font-weight: 600;
-            color: #0066cc;
-        }
-        .autocomplete-item .course-info {
-            font-size: 13px;
-            color: #495057;
-        }
-        .autocomplete-item .schedule-details {
-            font-size: 12px;
-            color: #6c757d;
-            margin-top: 3px;
-        }
-        /* Schedule suggestions section */
-        .schedule-suggestions-section {
-            margin-top: 15px;
-            padding: 15px;
-            background: #f8f9fa;
-            border-radius: 8px;
-            border: 1px solid #dee2e6;
-        }
-        .schedules-list {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            max-height: 300px;
-            overflow-y: auto;
-            margin-top: 10px;
-        }
-        .schedule-item {
-            padding: 12px;
-            background: #fff;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .schedule-item:hover {
-            background: #e7f3ff;
-            border-color: #b6d4fe;
-        }
-        .schedule-item .schedule-id {
-            font-weight: 600;
-            color: #0066cc;
-            font-size: 14px;
-        }
-        .schedule-item .course-info {
-            font-size: 14px;
-            color: #212529;
-            margin: 4px 0;
-        }
-        .schedule-item .schedule-details {
-            font-size: 12px;
-            color: #6c757d;
-        }
-        .schedule-item .slots {
-            font-size: 12px;
-            color: #28a745;
-            font-weight: 500;
-        }
-        .schedule-item .slots.full {
-            color: #dc3545;
-        }
-        
-        /* Enrollment Status Labels */
-        .schedule-item .enrollment-status {
-            display: inline-block;
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            margin-left: 8px;
-        }
-        .schedule-item .enrollment-status.enrolled {
-            background: #cce5ff;
-            color: #004085;
-        }
-        .schedule-item .enrollment-status.passed {
-            background: #d4edda;
-            color: #155724;
-        }
-        .schedule-item .enrollment-status.failed {
-            background: #f8d7da;
-            color: #721c24;
-        }
-        .schedule-item.is-enrolled {
-            opacity: 0.7;
-            border-left: 3px solid #007bff;
-        }
-        .schedule-item.is-passed {
-            opacity: 0.6;
-            border-left: 3px solid #28a745;
-        }
-        .schedule-item.is-failed {
-            border-left: 3px solid #dc3545;
-        }
-        
-        /* Notification Modal */
-        .notification-modal-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.4);
-            backdrop-filter: blur(4px);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 2000;
-            opacity: 0;
-            visibility: hidden;
-            transition: all 0.2s ease;
-        }
-        .notification-modal-overlay.active {
-            opacity: 1;
-            visibility: visible;
-        }
-        .notification-modal {
-            background: #fff;
-            border-radius: 12px;
-            width: 90%;
-            max-width: 380px;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
-            transform: translateY(-20px) scale(0.95);
-            transition: transform 0.2s ease;
-        }
-        .notification-modal-overlay.active .notification-modal {
-            transform: translateY(0) scale(1);
-        }
-        .notification-modal-header {
-            padding: 20px 20px 0;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .notification-modal-header .modal-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-        }
-        .notification-modal-header .modal-icon.info {
-            background: #cce5ff;
-            color: #004085;
-        }
-        .notification-modal-header .modal-icon.warning {
-            background: #fff3cd;
-            color: #856404;
-        }
-        .notification-modal-header .modal-icon.error {
-            background: #f8d7da;
-            color: #721c24;
-        }
-        .notification-modal-header .modal-icon.success {
-            background: #d4edda;
-            color: #155724;
-        }
-        .notification-modal-header h3 {
-            margin: 0;
-            font-size: 18px;
-            font-weight: 600;
-            color: #212529;
-        }
-        .notification-modal-body {
-            padding: 16px 20px 20px;
-        }
-        .notification-modal-body p {
-            margin: 0;
-            font-size: 14px;
-            color: #495057;
-            line-height: 1.6;
-        }
-        .notification-modal-footer {
-            padding: 0 20px 20px;
-            display: flex;
-            justify-content: flex-end;
-            gap: 10px;
-        }
-        .notification-modal-footer .btn {
-            padding: 10px 20px;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        .notification-modal-footer .btn-secondary {
-            background: #e9ecef;
-            color: #495057;
-        }
-        .notification-modal-footer .btn-secondary:hover {
-            background: #dee2e6;
-        }
-        .success-msg {
-            background: #d4edda;
-            color: #155724;
-            padding: 10px 15px;
-            border-radius: 6px;
-            margin-top: 10px;
-        }
-        .program-mismatch-warning {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 10px 15px;
-            border-radius: 6px;
-            margin-top: 10px;
-            font-size: 13px;
-        }
-        
-        /* Term Mismatch Warning */
-        .term-mismatch-warning {
-            background: #f8d7da;
-            border: 1px solid #f5c6cb;
-            color: #721c24;
-            padding: 15px;
-            border-radius: 8px;
-            margin-top: 15px;
-            font-size: 14px;
-        }
-        .term-mismatch-warning .warning-title {
-            font-weight: 600;
-            margin-bottom: 8px;
-        }
-        .term-mismatch-warning .warning-details {
-            margin-bottom: 10px;
-            line-height: 1.6;
-        }
-        .term-mismatch-warning .warning-recommendation {
-            background: #fff;
-            padding: 10px 12px;
-            border-radius: 4px;
-            margin-top: 8px;
-        }
-        .term-mismatch-warning .recommended-code {
-            font-weight: 600;
-            color: #155724;
-            font-family: monospace;
-            font-size: 16px;
-        }
-        .term-mismatch-warning .btn-use-recommended {
-            margin-top: 10px;
-            background: #155724;
-            color: #fff;
-            padding: 8px 16px;
-            font-size: 13px;
-        }
-        .term-mismatch-warning .btn-use-recommended:hover {
-            background: #0d3d17;
-        }
-        /* Recent students */
-        .recent-students-section {
-            margin-top: 15px;
-            padding: 15px;
-            background: #e7f3ff;
-            border: 1px solid #b6d4fe;
-            border-radius: 6px;
-        }
-        .recent-students-section label {
-            display: block;
-            font-size: 13px;
-            color: #084298;
-            margin-bottom: 10px;
-            font-weight: 500;
-        }
-        .recent-students-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        .recent-student-item {
-            padding: 8px 12px;
-            background: #fff;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 13px;
-            transition: all 0.2s;
-        }
-        .recent-student-item:hover {
-            background: #0066cc;
-            color: #fff;
-            border-color: #0066cc;
-        }
-        .recent-student-item .sn {
-            font-weight: 600;
-        }
-        .recent-student-item .name {
-            color: #6c757d;
-            font-size: 12px;
-        }
-        .recent-student-item:hover .name {
-            color: #e7f3ff;
-        }
-        /* Programs section */
-        .programs-section {
-            margin-top: 15px;
-            padding: 15px;
-            background: #f0fff4;
-            border: 1px solid #c3e6cb;
-            border-radius: 6px;
-        }
-        .programs-section label {
-            display: block;
-            font-size: 13px;
-            color: #155724;
-            margin-bottom: 10px;
-            font-weight: 500;
-        }
-        .programs-list {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-        .program-item {
-            padding: 10px 12px;
-            background: #fff;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 13px;
-            transition: all 0.2s;
-        }
-        .program-item:hover {
-            background: #28a745;
-            color: #fff;
-            border-color: #28a745;
-        }
-        
-        /* Success Modal */
-        .success-modal-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.4);
-            backdrop-filter: blur(4px);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 2000;
-            opacity: 0;
-            visibility: hidden;
-            transition: all 0.2s ease;
-        }
-        .success-modal-overlay.active {
-            opacity: 1;
-            visibility: visible;
-        }
-        .success-modal {
-            background: #fff;
-            border-radius: 12px;
-            width: 90%;
-            max-width: 420px;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
-            transform: translateY(-20px) scale(0.95);
-            transition: transform 0.2s ease;
-        }
-        .success-modal-overlay.active .success-modal {
-            transform: translateY(0) scale(1);
-        }
-        .success-modal-header {
-            padding: 24px 24px 0;
-        }
-        .success-modal-header h3 {
-            margin: 0;
-            font-size: 20px;
-            font-weight: 600;
-            color: #155724;
-        }
-        .success-modal-body {
-            padding: 16px 24px 24px;
-        }
-        .success-modal-body p {
-            margin: 0 0 12px;
-            font-size: 15px;
-            color: #495057;
-            line-height: 1.5;
-        }
-        .success-modal-body p:last-child {
-            margin-bottom: 0;
-        }
-        .success-modal-courses {
-            background: #f8f9fa;
-            border-radius: 8px;
-            padding: 12px 16px;
-            margin-top: 16px;
-            max-height: 150px;
-            overflow-y: auto;
-        }
-        .success-modal-courses .course-item {
-            padding: 6px 0;
-            font-size: 14px;
-            color: #212529;
-            border-bottom: 1px solid #e9ecef;
-        }
-        .success-modal-courses .course-item:last-child {
-            border-bottom: none;
-        }
-        .success-modal-warnings {
-            background: #fff3cd;
-            border: 1px solid #ffc107;
-            border-radius: 8px;
-            padding: 12px 16px;
-            margin-top: 12px;
-            font-size: 13px;
-            color: #856404;
-        }
-        .success-modal-footer {
-            padding: 16px 24px 24px;
-            display: flex;
-            justify-content: flex-end;
-        }
-        .success-modal-footer .btn {
-            padding: 10px 24px;
-            font-size: 14px;
-            font-weight: 500;
-        }
-    </style>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css', '../')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/details.css', '../')); ?>">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <script src="<?php echo htmlspecialchars(app_asset('js/app.js', '../')); ?>" defer></script>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/forms_bundle.css', '../')); ?>">
 </head>
-<body>
+<body class="has-sidebar page-enrollment">
+    <?php require_once '../config/sidebar.php'; ?>
+    <?php renderAppSidebar(['active' => 'enrollment', 'basePath' => '..']); ?>
     <div class="container">
         <header>
             <h1>Enrollment</h1>
             <div class="header-actions">
-                <a href="../index.php" class="btn btn-back">← Back to Student List</a>
+                <a href="../index.php" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Student List</a>
             </div>
         </header>
+
+        <div id="enrollmentApiErrorNotice" role="alert" aria-live="polite" class="hidden" style="display:none; margin-bottom:16px; padding:12px 14px; border-radius:10px; border:1px solid rgba(189,69,48,0.35); background: var(--status-error-bg); color: var(--status-error); font-size:14px;"></div>
 
         <div class="student-details">
             <div class="enrollment-form" id="enrollmentForm">
@@ -1205,7 +597,7 @@ $conn->close();
                             <div class="warning-recommendation">
                                 Recommended term code: <span class="recommended-code" id="recommendedTermCode"></span>
                                 <br>
-                                <button type="button" class="btn btn-use-recommended" onclick="useRecommendedTermCode()">Use Recommended Code</button>
+                                <button type="button" class="btn btn-use-recommended" data-enrollment-action="use-recommended-term">Use Recommended Code</button>
                             </div>
                         </div>
                     </div>
@@ -1270,6 +662,7 @@ $conn->close();
     <script>
         const currentAcademicYearStart = <?php echo $current_academic_year_start; ?>;
         const maxAllowedYearStart = <?php echo $max_allowed_year_start; ?>;
+        const enrollmentCsrfToken = <?php echo json_encode(csrf_get_token($csrf_scope)); ?>;
         
         let validatedTermCode = null;
         let currentStudent = null;
@@ -1309,8 +702,66 @@ $conn->close();
         const schedulesList = document.getElementById('schedulesList');
         const filterYearLevel = document.getElementById('filterYearLevel');
         const filterSemester = document.getElementById('filterSemester');
+        const enrollmentApiErrorNotice = document.getElementById('enrollmentApiErrorNotice');
         
         let autocompleteTimeout = null;
+
+        function clearEnrollmentApiError() {
+            if (typeof clearApiErrorNotice === 'function') {
+                clearApiErrorNotice(enrollmentApiErrorNotice);
+                return;
+            }
+            if (!enrollmentApiErrorNotice) {
+                return;
+            }
+            enrollmentApiErrorNotice.textContent = '';
+            enrollmentApiErrorNotice.style.display = 'none';
+            enrollmentApiErrorNotice.classList.add('hidden');
+        }
+
+        function showEnrollmentApiError(message, onRetry) {
+            if (typeof showApiErrorNotice === 'function') {
+                showApiErrorNotice(
+                    enrollmentApiErrorNotice,
+                    message,
+                    onRetry,
+                    { fallbackMessage: 'Unable to complete the request right now. Please try again.' }
+                );
+                return;
+            }
+
+            if (!enrollmentApiErrorNotice) {
+                return;
+            }
+
+            enrollmentApiErrorNotice.textContent = message || 'Unable to complete the request right now. Please try again.';
+            enrollmentApiErrorNotice.style.display = 'block';
+            enrollmentApiErrorNotice.classList.remove('hidden');
+        }
+
+        function getEnrollmentApiErrorMessage(payload, fallbackMessage) {
+            if (!payload || typeof payload !== 'object' || !payload.error) {
+                return fallbackMessage;
+            }
+
+            if (typeof payload.error === 'string' && payload.error.trim() !== '') {
+                return payload.error;
+            }
+
+            if (payload.error && typeof payload.error.message === 'string' && payload.error.message.trim() !== '') {
+                return payload.error.message;
+            }
+
+            return fallbackMessage;
+        }
+
+        function unwrapEnrollmentApiResponse(response, payload, fallbackMessage) {
+            if (!response || !payload || payload.success !== true) {
+                throw new Error(getEnrollmentApiErrorMessage(payload, fallbackMessage));
+            }
+
+            return payload.data || {};
+        }
         
         // Toggle buttons for Recent Students and Available Programs
         toggleRecentStudentsBtn.addEventListener('click', function() {
@@ -1341,6 +792,7 @@ $conn->close();
         function loadScheduleSuggestions() {
             if (!currentStudent || !confirmedProgramId || !validatedTermCode) return;
             
+            clearEnrollmentApiError();
             filterYearLevel.textContent = currentStudent.year_level;
             filterSemester.textContent = validatedTermCode.semester === 0 ? 'Summer' : (validatedTermCode.semester === 1 ? '1st' : '2nd');
             schedulesList.innerHTML = '<span style="color: #6c757d;">Loading...</span>';
@@ -1348,10 +800,16 @@ $conn->close();
             const apiUrl = `?action=get_schedule_suggestions&program_id=${confirmedProgramId}&year_level=${currentStudent.year_level}&semester=${validatedTermCode.semester}&student_id=${currentStudent.id}&academic_year=${encodeURIComponent(validatedTermCode.academicYear)}`;
             
             fetch(apiUrl)
-                .then(r => r.json())
+                .then(async response => {
+                    const payload = await response.json();
+                    return unwrapEnrollmentApiResponse(response, payload, 'Unable to load schedule suggestions right now.');
+                })
                 .then(data => {
-                    if (data.success && data.schedules.length > 0) {
-                        schedulesList.innerHTML = data.schedules.map(s => {
+                    clearEnrollmentApiError();
+                    const schedules = Array.isArray(data.schedules) ? data.schedules : [];
+
+                    if (schedules.length > 0) {
+                        schedulesList.innerHTML = schedules.map(s => {
                             const slotsAvailable = s.capacity - s.enrolled_count;
                             const isFull = slotsAvailable <= 0;
                             const status = s.enrollment_status || 'available';
@@ -1412,6 +870,7 @@ $conn->close();
                 })
                 .catch(() => {
                     schedulesList.innerHTML = '<span style="color: #dc3545;">Error loading schedules.</span>';
+                    showEnrollmentApiError('Unable to load schedule suggestions right now.', loadScheduleSuggestions);
                 });
         }
         
@@ -1430,10 +889,15 @@ $conn->close();
                 const autocompleteUrl = `?action=get_schedule_suggestions&program_id=${confirmedProgramId}&year_level=${currentStudent.year_level}&semester=${validatedTermCode.semester}&search=${encodeURIComponent(searchTerm)}&student_id=${currentStudent.id}&academic_year=${encodeURIComponent(validatedTermCode.academicYear)}`;
                 
                 fetch(autocompleteUrl)
-                    .then(r => r.json())
+                    .then(async response => {
+                        const payload = await response.json();
+                        return unwrapEnrollmentApiResponse(response, payload, 'Unable to load schedule suggestions right now.');
+                    })
                     .then(data => {
-                        if (data.success && data.schedules.length > 0) {
-                            scheduleAutocomplete.innerHTML = data.schedules.slice(0, 8).map(s => {
+                        const schedules = Array.isArray(data.schedules) ? data.schedules : [];
+
+                        if (schedules.length > 0) {
+                            scheduleAutocomplete.innerHTML = schedules.slice(0, 8).map(s => {
                                 const slotsAvailable = s.capacity - s.enrolled_count;
                                 const status = s.enrollment_status || 'available';
                                 const statusBadge = status === 'enrolled' ? ' <span style="color:#004085;font-size:10px;">[ENROLLED]</span>' : 
@@ -1551,6 +1015,7 @@ $conn->close();
         
         function lookupStudent() {
             const studentNumber = studentNumberInput.value.trim();
+            clearEnrollmentApiError();
             studentError.classList.add('hidden');
             studentInfoDisplay.classList.add('hidden');
             
@@ -1560,16 +1025,33 @@ $conn->close();
             }
             
             fetch(`?action=lookup_student&student_number=${encodeURIComponent(studentNumber)}`)
-                .then(r => r.json())
+                .then(async response => {
+                    const payload = await response.json();
+                    if (!response.ok || !payload || payload.success !== true) {
+                        const err = new Error(getEnrollmentApiErrorMessage(payload, 'Error looking up student'));
+                        err.status = response.status;
+                        throw err;
+                    }
+
+                    return payload.data || {};
+                })
                 .then(data => {
-                    if (data.success) {
+                    if (data.student) {
+                        clearEnrollmentApiError();
                         currentStudent = data.student;
                         displayStudentInfo(data.student);
                     } else {
-                        showStudentError(data.error || 'Student not found');
+                        showStudentError('Student not found');
                     }
                 })
-                .catch(() => showStudentError('Error looking up student'));
+                .catch(error => {
+                    const message = error && error.message ? error.message : 'Error looking up student';
+                    showStudentError(message);
+
+                    if (!error || typeof error.status !== 'number' || error.status >= 500 || error.status === 0) {
+                        showEnrollmentApiError('Unable to look up student details right now.', lookupStudent);
+                    }
+                });
         }
         
         function showStudentError(msg) {
@@ -1710,6 +1192,7 @@ $conn->close();
         
         function lookupSchedule() {
             const scheduleId = scheduleCodeInput.value.trim();
+            clearEnrollmentApiError();
             scheduleError.classList.add('hidden');
             scheduleDisplay.classList.add('hidden');
             
@@ -1719,16 +1202,33 @@ $conn->close();
             }
             
             fetch(`?action=lookup_schedule&schedule_id=${encodeURIComponent(scheduleId)}`)
-                .then(r => r.json())
+                .then(async response => {
+                    const payload = await response.json();
+                    if (!response.ok || !payload || payload.success !== true) {
+                        const err = new Error(getEnrollmentApiErrorMessage(payload, 'Error looking up schedule'));
+                        err.status = response.status;
+                        throw err;
+                    }
+
+                    return payload.data || {};
+                })
                 .then(data => {
-                    if (data.success) {
+                    if (data.schedule) {
+                        clearEnrollmentApiError();
                         currentSchedule = data.schedule;
                         displaySchedule(data.schedule);
                     } else {
-                        showScheduleError(data.error || 'Schedule not found');
+                        showScheduleError('Schedule not found');
                     }
                 })
-                .catch(() => showScheduleError('Error looking up schedule'));
+                .catch(error => {
+                    const message = error && error.message ? error.message : 'Error looking up schedule';
+                    showScheduleError(message);
+
+                    if (!error || typeof error.status !== 'number' || error.status >= 500 || error.status === 0) {
+                        showEnrollmentApiError('Unable to load schedule details right now.', lookupSchedule);
+                    }
+                });
         }
         
         function showScheduleError(msg) {
@@ -1870,6 +1370,8 @@ $conn->close();
         });
         
         function processEnrollment() {
+            clearEnrollmentApiError();
+
             // Disable button during request
             enrollStudentBtn.disabled = true;
             enrollStudentBtn.textContent = 'Enrolling...';
@@ -1886,43 +1388,57 @@ $conn->close();
             
             fetch('?action=bulk_enroll', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': enrollmentCsrfToken
+                },
                 body: JSON.stringify(enrollData)
             })
-                .then(r => {
-                    console.log('Response status:', r.status);
-                    if (!r.ok) throw new Error('Server returned ' + r.status);
-                    return r.text();
-                })
-                .then(text => {
-                    console.log('Response text:', text);
-                    try {
-                        return JSON.parse(text);
-                    } catch (e) {
-                        throw new Error('Invalid JSON response: ' + text.substring(0, 100));
+                .then(async response => {
+                    console.log('Response status:', response.status);
+
+                    const payload = await response.json();
+                    if (!payload || typeof payload !== 'object') {
+                        throw new Error('Invalid server response.');
                     }
+
+                    if (payload.success !== true) {
+                        const errorMessage = getEnrollmentApiErrorMessage(payload, 'Unknown error occurred.');
+
+                        if (!response.ok && response.status >= 500) {
+                            throw new Error(errorMessage);
+                        }
+
+                        showNotification('error', 'Enrollment Failed', errorMessage);
+                        return null;
+                    }
+
+                    return payload.data || {};
                 })
                 .then(data => {
-                    console.log('Parsed data:', data);
-                    if (data.success) {
-                        // Get enrolled course names for display
-                        const enrolledCourses = pendingSubjects.map(s => `${s.course_code} - ${s.course_name}`);
-                        const warnings = data.errors && data.errors.length > 0 ? data.errors : null;
-                        
-                        showSuccessModal(data.message, enrolledCourses, warnings);
-                        
-                        // Reset form
-                        pendingSubjects = [];
-                        updatePendingList();
-                        scheduleCodeInput.value = '';
-                        scheduleDisplay.classList.add('hidden');
-                    } else {
-                        showNotification('error', 'Enrollment Failed', data.error || 'Unknown error occurred.');
+                    if (!data) {
+                        return;
                     }
+
+                    console.log('Parsed data:', data);
+
+                    clearEnrollmentApiError();
+
+                    // Get enrolled course names for display
+                    const enrolledCourses = pendingSubjects.map(s => `${s.course_code} - ${s.course_name}`);
+                    const warnings = Array.isArray(data.errors) && data.errors.length > 0 ? data.errors : null;
+
+                    showSuccessModal(data.message || 'Enrollment completed successfully.', enrolledCourses, warnings);
+
+                    // Reset form
+                    pendingSubjects = [];
+                    updatePendingList();
+                    scheduleCodeInput.value = '';
+                    scheduleDisplay.classList.add('hidden');
                 })
                 .catch(e => {
                     console.error('Enrollment error:', e);
-                    showNotification('error', 'Enrollment Error', 'Error processing enrollment: ' + e.message);
+                    showEnrollmentApiError('Error processing enrollment: ' + e.message, processEnrollment);
                 })
                 .finally(() => {
                     enrollStudentBtn.disabled = false;
@@ -1933,12 +1449,19 @@ $conn->close();
         // Load recent students
         function loadRecentStudents() {
             const recentList = document.getElementById('recentStudentsList');
+            clearEnrollmentApiError();
             
             fetch('?action=get_recent_students')
-                .then(r => r.json())
+                .then(async response => {
+                    const payload = await response.json();
+                    return unwrapEnrollmentApiResponse(response, payload, 'Unable to load recent students right now.');
+                })
                 .then(data => {
-                    if (data.success && data.students.length > 0) {
-                        recentList.innerHTML = data.students.map(s => `
+                    clearEnrollmentApiError();
+                    const students = Array.isArray(data.students) ? data.students : [];
+
+                    if (students.length > 0) {
+                        recentList.innerHTML = students.map(s => `
                             <div class="recent-student-item" data-sn="${s.student_number}">
                                 <span class="sn">${s.student_number}</span><br>
                                 <span class="name">${s.first_name} ${s.last_name}</span>
@@ -1958,6 +1481,7 @@ $conn->close();
                 })
                 .catch(() => {
                     recentList.innerHTML = '<span style="color: #dc3545; font-size: 12px;">Error loading recent students</span>';
+                    showEnrollmentApiError('Unable to load recent students right now.', loadRecentStudents);
                 });
         }
         
@@ -1976,7 +1500,7 @@ $conn->close();
             <div class="success-modal-warnings hidden" id="successModalWarnings"></div>
         </div>
         <div class="success-modal-footer">
-            <button type="button" class="btn btn-primary" onclick="closeSuccessModal()">Done</button>
+            <button type="button" class="btn btn-primary" data-enrollment-action="close-success-modal">Done</button>
         </div>
     </div>
 </div>
@@ -2032,14 +1556,14 @@ document.addEventListener('keydown', function(e) {
 <div class="notification-modal-overlay" id="notificationModal">
     <div class="notification-modal">
         <div class="notification-modal-header">
-            <div class="modal-icon" id="notificationIcon">!</div>
+            <div class="modal-icon" id="notificationIcon"><i class="bi bi-info-circle-fill" aria-hidden="true"></i></div>
             <h3 id="notificationTitle">Notice</h3>
         </div>
         <div class="notification-modal-body">
             <p id="notificationMessage"></p>
         </div>
         <div class="notification-modal-footer" id="notificationFooter">
-            <button type="button" class="btn btn-primary" onclick="closeNotificationModal()">OK</button>
+            <button type="button" class="btn btn-primary" data-notification-action="close">OK</button>
         </div>
     </div>
 </div>
@@ -2062,21 +1586,21 @@ function showNotification(type, title, message, callback) {
     iconEl.className = 'modal-icon ' + type;
     switch(type) {
         case 'error':
-            iconEl.textContent = '✕';
+            iconEl.innerHTML = '<i class="bi bi-x-octagon-fill" aria-hidden="true"></i>';
             break;
         case 'warning':
-            iconEl.textContent = '!';
+            iconEl.innerHTML = '<i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>';
             break;
         case 'success':
-            iconEl.textContent = '✓';
+            iconEl.innerHTML = '<i class="bi bi-check-circle-fill" aria-hidden="true"></i>';
             break;
         default:
-            iconEl.textContent = 'i';
+            iconEl.innerHTML = '<i class="bi bi-info-circle-fill" aria-hidden="true"></i>';
     }
     
     titleEl.textContent = title;
     msgEl.innerHTML = message;
-    footerEl.innerHTML = '<button type="button" class="btn btn-primary" onclick="closeNotificationModal()">OK</button>';
+    footerEl.innerHTML = '<button type="button" class="btn btn-primary" data-notification-action="close">OK</button>';
     
     modal.classList.add('active');
     document.body.style.overflow = 'hidden';
@@ -2093,13 +1617,19 @@ function showConfirmation(type, title, message, confirmText, onConfirm, onCancel
     notificationCallback = onCancel || null;
     
     iconEl.className = 'modal-icon ' + type;
-    iconEl.textContent = type === 'warning' ? '?' : '!';
+    if (type === 'warning') {
+        iconEl.innerHTML = '<i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>';
+    } else if (type === 'error') {
+        iconEl.innerHTML = '<i class="bi bi-x-octagon-fill" aria-hidden="true"></i>';
+    } else {
+        iconEl.innerHTML = '<i class="bi bi-question-circle-fill" aria-hidden="true"></i>';
+    }
     
     titleEl.textContent = title;
     msgEl.innerHTML = message;
     footerEl.innerHTML = `
-        <button type="button" class="btn btn-secondary" onclick="closeNotificationModal(false)">Cancel</button>
-        <button type="button" class="btn btn-primary" onclick="closeNotificationModal(true)">${confirmText || 'Confirm'}</button>
+        <button type="button" class="btn btn-secondary" data-notification-action="cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" data-notification-action="confirm">${confirmText || 'Confirm'}</button>
     `;
     
     modal.classList.add('active');
@@ -2126,6 +1656,33 @@ function closeNotificationModal(confirmed) {
 // Close notification on overlay click
 document.getElementById('notificationModal').addEventListener('click', function(e) {
     if (e.target === this) closeNotificationModal(false);
+});
+
+document.addEventListener('click', function(e) {
+    const actionTrigger = e.target.closest('[data-enrollment-action], [data-notification-action]');
+    if (!actionTrigger) {
+        return;
+    }
+
+    const enrollmentAction = actionTrigger.getAttribute('data-enrollment-action');
+    if (enrollmentAction === 'use-recommended-term') {
+        useRecommendedTermCode();
+        return;
+    }
+
+    if (enrollmentAction === 'close-success-modal') {
+        closeSuccessModal();
+        return;
+    }
+
+    const notificationAction = actionTrigger.getAttribute('data-notification-action');
+    if (notificationAction === 'close') {
+        closeNotificationModal();
+    } else if (notificationAction === 'cancel') {
+        closeNotificationModal(false);
+    } else if (notificationAction === 'confirm') {
+        closeNotificationModal(true);
+    }
 });
 </script>
 

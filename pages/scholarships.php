@@ -5,10 +5,12 @@
  */
 require_once '../config/db_helpers.php';
 require_once '../config/finance_helpers.php';
+require_once '../config/csrf_helpers.php';
 
 $conn = getDBConnection();
 $message = '';
 $message_type = '';
+$csrf_scope = 'scholarships_management';
 
 // Get current academic year from settings
 $settings = [];
@@ -20,7 +22,10 @@ $current_ay = $settings['current_academic_year'] ?? (date('Y') . '-' . (date('Y'
 
 // Handle form submissions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (isset($_POST['action'])) {
+    if (!csrf_validate_request_token($csrf_scope)) {
+        $message = 'Invalid or expired security token. Please refresh and try again.';
+        $message_type = 'error';
+    } elseif (isset($_POST['action'])) {
         switch ($_POST['action']) {
             case 'award':
                 $student_id = intval($_POST['student_id'] ?? 0);
@@ -28,7 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $ay = $_POST['academic_year'] ?? $current_ay;
                 $sem = intval($_POST['semester'] ?? 1);
                 $notes = trim($_POST['notes'] ?? '');
-                
+
                 if ($student_id > 0 && $scholarship_id > 0) {
                     if (awardScholarship($conn, $student_id, $scholarship_id, $ay, $sem, $notes)) {
                         $message = 'Scholarship awarded successfully!';
@@ -42,7 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $message_type = 'error';
                 }
                 break;
-                
+
             case 'revoke':
                 $ss_id = intval($_POST['student_scholarship_id'] ?? 0);
                 if ($ss_id > 0) {
@@ -136,111 +141,21 @@ $conn->close();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Scholarship Management</title>
-    <link rel="stylesheet" href="../css/common.css">
-    <link rel="stylesheet" href="../css/enhancements.css">
-    <link rel="stylesheet" href="../css/details.css">
-    <style>
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-        .stat-card {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            border-radius: 10px;
-            text-align: center;
-        }
-        .stat-card h3 {
-            font-size: 2em;
-            margin: 0;
-        }
-        .stat-card p {
-            margin: 5px 0 0;
-            opacity: 0.9;
-            font-size: 0.9em;
-        }
-        .stat-card.green { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
-        .stat-card.blue { background: linear-gradient(135deg, #4e73df 0%, #36b9cc 100%); }
-        .stat-card.orange { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
-        
-        .form-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-        }
-        
-        .scholarship-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        .scholarship-table th, .scholarship-table td {
-            padding: 12px;
-            border: 1px solid #eee;
-            text-align: left;
-        }
-        .scholarship-table th {
-            background: #f8f9fa;
-            font-weight: 600;
-        }
-        .scholarship-table tr:hover {
-            background: #f8f9fa;
-        }
-        
-        .status-active { background: #d4edda; color: #155724; padding: 3px 8px; border-radius: 4px; }
-        .status-revoked { background: #f8d7da; color: #721c24; padding: 3px 8px; border-radius: 4px; }
-        .status-expired { background: #fff3cd; color: #856404; padding: 3px 8px; border-radius: 4px; }
-        
-        .discount-badge {
-            background: #e3f2fd;
-            color: #1565c0;
-            padding: 4px 10px;
-            border-radius: 20px;
-            font-size: 0.85em;
-        }
-        
-        .filter-form {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-        
-        .tabs {
-            display: flex;
-            border-bottom: 2px solid #eee;
-            margin-bottom: 20px;
-        }
-        .tab {
-            padding: 10px 20px;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            margin-bottom: -2px;
-            color: #666;
-        }
-        .tab.active {
-            border-bottom-color: #4e73df;
-            color: #4e73df;
-            font-weight: 600;
-        }
-        .tab-content {
-            display: none;
-        }
-        .tab-content.active {
-            display: block;
-        }
-    </style>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css', '../')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/details.css', '../')); ?>">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <script src="<?php echo htmlspecialchars(app_asset('js/app.js', '../')); ?>" defer></script>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/reports_bundle.css', '../')); ?>">
 </head>
-<body>
+<body class="has-sidebar page-scholarships">
+    <?php require_once '../config/sidebar.php'; ?>
+    <?php renderAppSidebar(['active' => 'scholarships', 'basePath' => '..']); ?>
     <div class="container">
         <header>
             <h1>Scholarship Management</h1>
             <div class="header-actions">
-                <a href="../index.php" class="btn btn-back">← Back to Dashboard</a>
-                <a href="finance.php" class="btn btn-primary">Finance Dashboard</a>
+                <a href="../index.php" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Dashboard</a>
+                <a href="finance.php" class="btn btn-primary"><i class="bi bi-cash-stack" aria-hidden="true"></i>Finance Dashboard</a>
             </div>
         </header>
 
@@ -270,37 +185,45 @@ $conn->close();
 
         <!-- Tabs -->
         <div class="tabs">
-            <div class="tab active" onclick="showTab('awards')">Awarded Scholarships</div>
-            <div class="tab" onclick="showTab('award-new')">Award New</div>
-            <div class="tab" onclick="showTab('scholarship-types')">Scholarship Types</div>
+            <button type="button" class="tab active" data-tab="awards">Awarded Scholarships</button>
+            <button type="button" class="tab" data-tab="award-new">Award New</button>
+            <button type="button" class="tab" data-tab="scholarship-types">Scholarship Types</button>
         </div>
 
         <!-- Tab: Awarded Scholarships -->
         <div id="tab-awards" class="tab-content active">
             <div class="card">
                 <form method="get" class="filter-form">
-                    <label>Academic Year:</label>
-                    <input type="text" name="ay" value="<?php echo htmlspecialchars($filter_ay); ?>" placeholder="e.g., 2025-2026" class="form-control w-120">
-                    
-                    <label>Semester:</label>
-                    <select name="sem" class="form-control w-120">
-                        <option value="0">All</option>
-                        <option value="1" <?php echo $filter_sem == 1 ? 'selected' : ''; ?>>1st</option>
-                        <option value="2" <?php echo $filter_sem == 2 ? 'selected' : ''; ?>>2nd</option>
-                    </select>
-                    
-                    <label>Scholarship:</label>
-                    <select name="scholarship" class="form-control w-180">
-                        <option value="0">All Types</option>
-                        <?php foreach ($scholarships as $s): ?>
-                            <option value="<?php echo $s['scholarship_id']; ?>" <?php echo $filter_scholarship == $s['scholarship_id'] ? 'selected' : ''; ?>>
-                                <?php echo htmlspecialchars($s['name']); ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    
-                    <button type="submit" class="btn btn-primary">Filter</button>
-                    <a href="scholarships.php" class="btn">Clear</a>
+                    <div class="filter-field">
+                        <label for="filter-ay">Academic Year</label>
+                        <input id="filter-ay" type="text" name="ay" value="<?php echo htmlspecialchars($filter_ay); ?>" placeholder="e.g., 2025-2026" class="form-control">
+                    </div>
+
+                    <div class="filter-field">
+                        <label for="filter-sem">Semester</label>
+                        <select id="filter-sem" name="sem" class="form-control">
+                            <option value="0">All</option>
+                            <option value="1" <?php echo $filter_sem == 1 ? 'selected' : ''; ?>>1st</option>
+                            <option value="2" <?php echo $filter_sem == 2 ? 'selected' : ''; ?>>2nd</option>
+                        </select>
+                    </div>
+
+                    <div class="filter-field">
+                        <label for="filter-scholarship">Scholarship</label>
+                        <select id="filter-scholarship" name="scholarship" class="form-control">
+                            <option value="0">All Types</option>
+                            <?php foreach ($scholarships as $s): ?>
+                                <option value="<?php echo $s['scholarship_id']; ?>" <?php echo $filter_scholarship == $s['scholarship_id'] ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($s['name']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <div class="filter-actions">
+                        <button type="submit" class="btn btn-primary">Filter</button>
+                        <a href="scholarships.php" class="btn">Clear</a>
+                    </div>
                 </form>
 
                 <table class="scholarship-table">
@@ -347,7 +270,8 @@ $conn->close();
                                     </td>
                                     <td>
                                         <?php if ($a['status'] === 'Active'): ?>
-                                            <form method="post" class="inline-form" onsubmit="return confirm('Revoke this scholarship?');">
+                                            <form method="post" class="inline-form" data-confirm="Revoke this scholarship?" data-confirm-title="Revoke Scholarship" data-confirm-text="Revoke" data-confirm-style="danger">
+                                                <?php echo csrf_token_field($csrf_scope); ?>
                                                 <input type="hidden" name="action" value="revoke">
                                                 <input type="hidden" name="student_scholarship_id" value="<?php echo $a['student_scholarship_id']; ?>">
                                                 <button type="submit" class="btn btn-danger">Revoke</button>
@@ -369,12 +293,13 @@ $conn->close();
             <div class="card">
                 <h3>Award Scholarship to Student</h3>
                 <form method="post">
+                    <?php echo csrf_token_field($csrf_scope); ?>
                     <input type="hidden" name="action" value="award">
                     
                     <div class="form-grid">
                         <div class="form-group">
                             <label for="student_id">Student *</label>
-                            <select name="student_id" id="student_id" class="form-control" required onchange="autofillStudentTerm()">
+                            <select name="student_id" id="student_id" class="form-control" required>
                                 <option value="">-- Select Student --</option>
                                 <?php foreach ($students as $st): ?>
                                     <option value="<?php echo $st['student_id']; ?>" data-semester="<?php echo $st['current_semester']; ?>">
@@ -464,14 +389,18 @@ $conn->close();
     </div>
 
     <script>
-        function showTab(tabName) {
+        function showTab(tabName, triggerEl = null) {
             // Hide all tabs
             document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             
             // Show selected tab
             document.getElementById('tab-' + tabName).classList.add('active');
-            event.target.classList.add('active');
+
+            const activeTrigger = triggerEl || document.querySelector(`.tab[data-tab="${tabName}"]`);
+            if (activeTrigger) {
+                activeTrigger.classList.add('active');
+            }
         }
 
         // Autofill academic year and semester based on student's current term
@@ -488,6 +417,25 @@ $conn->close();
                 }
             }
         }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const tabsContainer = document.querySelector('.tabs');
+            if (tabsContainer) {
+                tabsContainer.addEventListener('click', (event) => {
+                    const trigger = event.target.closest('.tab[data-tab]');
+                    if (!trigger) {
+                        return;
+                    }
+
+                    showTab(trigger.getAttribute('data-tab'), trigger);
+                });
+            }
+
+            const studentSelect = document.getElementById('student_id');
+            if (studentSelect) {
+                studentSelect.addEventListener('change', autofillStudentTerm);
+            }
+        });
     </script>
 
 </body>

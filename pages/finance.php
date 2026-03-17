@@ -55,16 +55,24 @@ $params[] = $offset;
 $result = db_query($conn, $sql, $types, $params);
 $students = $result ? db_fetch_all($result) : [];
 
-// Calculate Balances for displayed students using program-specific rates
+// Calculate balances and credits for displayed students in batch.
+$student_program_map = [];
+foreach ($students as $student_row) {
+    $sid = intval($student_row['student_id']);
+    if ($sid <= 0) {
+        continue;
+    }
+    $student_program_map[$sid] = isset($student_row['program_id']) ? intval($student_row['program_id']) : null;
+}
+
+$balances_by_student = getStudentBalancesBatch($conn, $student_program_map);
+$credits_by_student = getAvailableOverpaymentCreditsBatch($conn, array_keys($student_program_map));
+
 foreach ($students as &$student) {
-    $sid = $student['student_id'];
-    
-    // Use the updated getStudentBalance function which handles program-specific tuition rates
-    $student['balance'] = getStudentBalance($conn, $sid);
-    
-    // Get available credits (from overpayments)
-    $student['available_credits'] = getAvailableOverpaymentCredit($conn, $sid);
-    
+    $sid = intval($student['student_id']);
+    $student['balance'] = $balances_by_student[$sid] ?? 0.0;
+    $student['available_credits'] = $credits_by_student[$sid] ?? 0.0;
+
     // Determine status
     if ($student['balance'] > 0) {
         $student['status'] = 'Unpaid';
@@ -100,324 +108,23 @@ $conn->close();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Finance Dashboard</title>
-    <link rel="stylesheet" href="../css/common.css">
-    <link rel="stylesheet" href="../css/enhancements.css">
-    <style>
-        /* Finance-specific styles */
-        .finance-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 15px;
-            margin-bottom: 25px;
-        }
-        
-        .finance-title-group {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-        
-        .filter-section {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: var(--shadow-sm);
-            border: 1px solid var(--border-color);
-        }
-        
-        .filter-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 15px;
-            align-items: flex-end;
-        }
-        
-        .filter-group {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-        
-        .filter-group label {
-            font-size: 12px;
-            font-weight: 500;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .filter-group input,
-        .filter-group select {
-            padding: 10px 14px;
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-md);
-            font-size: 14px;
-            min-width: 180px;
-            background: white;
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        
-        .filter-group input:focus,
-        .filter-group select:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
-        }
-        
-        .filter-buttons {
-            display: flex;
-            gap: 10px;
-        }
-        
-        .status-summary {
-            display: flex;
-            gap: 15px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-            justify-content: center;
-        }
-        
-        .status-card {
-            background: var(--bg-card);
-            border-radius: var(--radius-md);
-            padding: 15px 25px;
-            box-shadow: var(--shadow-sm);
-            border: 1px solid var(--border-color);
-            text-align: center;
-            min-width: 120px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        
-        .status-card:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .status-card.active {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
-        }
-        
-        .status-card .count {
-            font-size: 28px;
-            font-weight: 700;
-            font-family: var(--font-heading);
-        }
-        
-        .status-card .label {
-            font-size: 12px;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-top: 4px;
-        }
-        
-        .status-card.unpaid .count { color: var(--status-error); }
-        .status-card.clear .count { color: var(--status-success); }
-        .status-card.overpaid .count { color: var(--status-info); }
-        
-        .finance-table-container {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-sm);
-            overflow: hidden;
-            border: 1px solid var(--border-color);
-        }
-        
-        .finance-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        
-        .finance-table th {
-            background: #f8f9fa;
-            padding: 14px 16px;
-            text-align: left;
-            font-size: 12px;
-            font-weight: 600;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 2px solid var(--border-color);
-        }
-        
-        .finance-table td {
-            padding: 14px 16px;
-            border-bottom: 1px solid var(--border-color);
-            font-size: 14px;
-        }
-        
-        .finance-table tbody tr:hover {
-            background: #f8f9fa;
-        }
-        
-        .finance-table tbody tr:last-child td {
-            border-bottom: none;
-        }
-        
-        .balance-amount {
-            font-weight: 600;
-            font-family: var(--font-heading);
-        }
-        
-        .balance-positive { color: var(--status-error); }
-        .balance-negative { color: var(--status-info); }
-        .balance-zero { color: var(--status-success); }
-        
-        .status-badge {
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-        
-        .status-unpaid {
-            background: rgba(239, 68, 68, 0.1);
-            color: var(--status-error);
-        }
-        
-        .status-clear {
-            background: rgba(16, 185, 129, 0.1);
-            color: var(--status-success);
-        }
-        
-        .status-overpaid {
-            background: rgba(14, 165, 233, 0.1);
-            color: var(--status-info);
-        }
-        
-        .btn-view {
-            background: var(--primary);
-            color: white;
-            padding: 8px 16px;
-            border-radius: var(--radius-md);
-            text-decoration: none;
-            font-size: 13px;
-            font-weight: 500;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            transition: all 0.15s ease;
-            border: 1px solid var(--primary);
-        }
-        
-        .btn-view:hover {
-            background: #3730a3;
-            border-color: #3730a3;
-            color: white;
-        }
-        
-        .pagination {
-            display: flex;
-            gap: 8px;
-            justify-content: center;
-            padding: 20px;
-            flex-wrap: wrap;
-        }
-        
-        .pagination a {
-            padding: 8px 14px;
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-md);
-            text-decoration: none;
-            color: var(--text-main);
-            font-size: 14px;
-            transition: all 0.2s ease;
-        }
-        
-        .pagination a:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .pagination a.active {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: var(--text-muted);
-        }
-        
-        .empty-state-icon {
-            font-size: 48px;
-            margin-bottom: 15px;
-            opacity: 0.5;
-        }
-        
-        .active-filters {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            margin-top: 15px;
-        }
-        
-        .filter-tag {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 12px;
-            background: rgba(79, 70, 229, 0.1);
-            color: var(--primary);
-            border-radius: 20px;
-            font-size: 13px;
-        }
-        
-        .filter-tag-remove {
-            cursor: pointer;
-            font-weight: bold;
-            opacity: 0.7;
-        }
-        
-        .filter-tag-remove:hover {
-            opacity: 1;
-        }
-        
-        @media (max-width: 768px) {
-            .finance-header {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            
-            .filter-row {
-                flex-direction: column;
-            }
-            
-            .filter-group input,
-            .filter-group select {
-                min-width: 100%;
-            }
-            
-            .status-summary {
-                justify-content: center;
-            }
-            
-            .finance-table-container {
-                overflow-x: auto;
-            }
-            
-            .finance-table {
-                min-width: 600px;
-            }
-        }
-    </style>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css', '../')); ?>">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <script src="<?php echo htmlspecialchars(app_asset('js/app.js', '../')); ?>" defer></script>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/finance_bundle.css', '../')); ?>">
 </head>
-<body>
+<body class="has-sidebar page-finance">
+<?php require_once '../config/sidebar.php'; ?>
+<?php renderAppSidebar(['active' => 'finance', 'basePath' => '..']); ?>
 
 <div class="container">
     <!-- Header -->
     <header>
         <div class="finance-title-group">
-            <a href="../index.php" class="btn btn-secondary">&larr; Back</a>
-            <h1>Finance Dashboard</h1>
+            <div class="finance-title-text">
+                <h1>Finance Dashboard</h1>
+                <p class="finance-subtitle">Monitor balances and payment status for enrolled students.</p>
+            </div>
         </div>
     </header>
     
@@ -467,7 +174,7 @@ $conn->close();
                     <?php if ($search): ?>
                         <span class="filter-tag">
                             Search: "<?php echo htmlspecialchars($search); ?>"
-                            <span class="filter-tag-remove" onclick="clearFilter('search')">&times;</span>
+                            <button type="button" class="filter-tag-remove" aria-label="Remove search filter" data-filter="search">&times;</button>
                         </span>
                     <?php endif; ?>
                     <?php if ($filter_program): ?>
@@ -482,13 +189,13 @@ $conn->close();
                         ?>
                         <span class="filter-tag">
                             Program: <?php echo htmlspecialchars($prog_name); ?>
-                            <span class="filter-tag-remove" onclick="clearFilter('program')">&times;</span>
+                            <button type="button" class="filter-tag-remove" aria-label="Remove program filter" data-filter="program">&times;</button>
                         </span>
                     <?php endif; ?>
                     <?php if ($filter_status): ?>
                         <span class="filter-tag">
                             Status: <?php echo htmlspecialchars($filter_status); ?>
-                            <span class="filter-tag-remove" onclick="clearFilter('status')">&times;</span>
+                            <button type="button" class="filter-tag-remove" aria-label="Remove status filter" data-filter="status">&times;</button>
                         </span>
                     <?php endif; ?>
                 </div>
@@ -498,18 +205,18 @@ $conn->close();
     
     <!-- Status Summary Cards -->
     <div class="status-summary">
-        <div class="status-card unpaid <?php echo $filter_status === 'Unpaid' ? 'active' : ''; ?>" onclick="filterByStatus('Unpaid')">
+        <button type="button" class="status-card unpaid <?php echo $filter_status === 'Unpaid' ? 'active' : ''; ?>" aria-pressed="<?php echo $filter_status === 'Unpaid' ? 'true' : 'false'; ?>" data-status="Unpaid">
             <div class="count"><?php echo $status_counts['Unpaid']; ?></div>
             <div class="label">Unpaid</div>
-        </div>
-        <div class="status-card clear <?php echo $filter_status === 'Clear' ? 'active' : ''; ?>" onclick="filterByStatus('Clear')">
+        </button>
+        <button type="button" class="status-card clear <?php echo $filter_status === 'Clear' ? 'active' : ''; ?>" aria-pressed="<?php echo $filter_status === 'Clear' ? 'true' : 'false'; ?>" data-status="Clear">
             <div class="count"><?php echo $status_counts['Clear']; ?></div>
             <div class="label">Clear</div>
-        </div>
-        <div class="status-card overpaid <?php echo $filter_status === 'Overpaid' ? 'active' : ''; ?>" onclick="filterByStatus('Overpaid')">
+        </button>
+        <button type="button" class="status-card overpaid <?php echo $filter_status === 'Overpaid' ? 'active' : ''; ?>" aria-pressed="<?php echo $filter_status === 'Overpaid' ? 'true' : 'false'; ?>" data-status="Overpaid">
             <div class="count"><?php echo $status_counts['Overpaid']; ?></div>
             <div class="label">Overpaid</div>
-        </div>
+        </button>
     </div>
     
     <!-- Finance Table -->
@@ -530,7 +237,7 @@ $conn->close();
                     <tr>
                         <td colspan="6">
                             <div class="empty-state">
-                                <div class="empty-state-icon">📋</div>
+                                <div class="empty-state-icon"><i class="bi bi-card-list" aria-hidden="true"></i></div>
                                 <p>No students found matching your criteria.</p>
                             </div>
                         </td>
@@ -621,6 +328,32 @@ function clearFilter(filterName) {
     url.searchParams.set('page', '1');
     window.location.href = url.toString();
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+    const statusSummary = document.querySelector('.status-summary');
+    if (statusSummary) {
+        statusSummary.addEventListener('click', (event) => {
+            const trigger = event.target.closest('.status-card[data-status]');
+            if (!trigger) {
+                return;
+            }
+
+            filterByStatus(trigger.getAttribute('data-status'));
+        });
+    }
+
+    const activeFilters = document.querySelector('.active-filters');
+    if (activeFilters) {
+        activeFilters.addEventListener('click', (event) => {
+            const trigger = event.target.closest('.filter-tag-remove[data-filter]');
+            if (!trigger) {
+                return;
+            }
+
+            clearFilter(trigger.getAttribute('data-filter'));
+        });
+    }
+});
 </script>
 
 

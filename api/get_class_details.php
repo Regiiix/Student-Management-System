@@ -1,14 +1,17 @@
 <?php
-require_once '../config/db_helpers.php';
-
-header('Content-Type: application/json');
+require_once __DIR__ . '/../config/db_helpers.php';
+require_once __DIR__ . '/../config/api_response_helpers.php';
 
 $curriculum_id = isset($_GET['curriculum_id']) ? intval($_GET['curriculum_id']) : 0;
-$academic_year = isset($_GET['ay']) ? $_GET['ay'] : '';
+$academic_year = isset($_GET['ay']) ? trim((string)$_GET['ay']) : '';
 
 if ($curriculum_id <= 0 || empty($academic_year)) {
-    echo json_encode(['error' => 'Invalid parameters']);
-    exit;
+    api_respond_error(
+        'Invalid parameters',
+        422,
+        'invalid_parameters',
+        ['required' => ['curriculum_id', 'ay']]
+    );
 }
 
 $conn = getDBConnection();
@@ -25,12 +28,18 @@ $course_sql = "SELECT c.course_code, c.course_name, c.units, c.year_level, c.sem
 // Note: schedules might have multiple rows if multiple meetings, but usually capacity/enrolled is same per course section.
 // For simplicity, we fetch all schedule rows to show full meeting times.
 $sched_res = db_query($conn, $course_sql, 'i', [$curriculum_id]);
+$schedules = [];
+
+if ($sched_res === false) {
+    $conn->close();
+    api_respond_error('Unable to load class details', 500, 'class_details_query_failed');
+}
+
 $schedules = $sched_res ? db_fetch_all($sched_res) : [];
 
 if (empty($schedules)) {
-    echo json_encode(['error' => 'Course not found']);
     $conn->close();
-    exit;
+    api_respond_error('Course not found', 404, 'course_not_found');
 }
 
 // Consolidate course info (taking first row for general info)
@@ -48,7 +57,12 @@ $count_sql = "SELECT COUNT(*) as cnt
               LEFT JOIN semester_status ss ON (e.student_id = ss.student_id AND e.academic_year = ss.academic_year AND c.semester = ss.semester)
               WHERE e.curriculum_id = ? AND e.academic_year = ? AND e.status = 'Enrolled'
               AND (ss.status = 'In Progress' OR ss.status IS NULL)";
-$real_count = db_fetch_one(db_query($conn, $count_sql, 'is', [$curriculum_id, $academic_year]))['cnt'] ?? 0;
+$count_result = db_query($conn, $count_sql, 'is', [$curriculum_id, $academic_year]);
+if ($count_result === false) {
+    $conn->close();
+    api_respond_error('Unable to load enrollment count', 500, 'enrollment_count_query_failed');
+}
+$real_count = db_fetch_one($count_result)['cnt'] ?? 0;
 
 
 // 2. Get Enrolled Students (Filtered by Semester Status to match active term)
@@ -66,9 +80,13 @@ $stud_sql = "SELECT s.student_id, s.student_number, s.first_name, s.last_name,
              ORDER BY s.last_name, s.first_name";
 
 $students_res = db_query($conn, $stud_sql, 'is', [$curriculum_id, $academic_year]);
+if ($students_res === false) {
+    $conn->close();
+    api_respond_error('Unable to load class list', 500, 'class_list_query_failed');
+}
 $students = $students_res ? db_fetch_all($students_res) : [];
 
-echo json_encode([
+$payload = [
     'course_code' => $info['course_code'],
     'course_name' => $info['course_name'],
     'instructor' => $instructor,
@@ -85,7 +103,11 @@ echo json_encode([
         ];
     }, $schedules),
     'students' => $students
-]);
+];
 
 $conn->close();
+api_respond_success($payload, 200, [
+    'curriculum_id' => $curriculum_id,
+    'academic_year' => $academic_year
+]);
 ?>

@@ -496,6 +496,12 @@
     color: #d39e00;
 }
 
+.conflict-warning-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .conflict-warning ul {
     margin: 10px 0 0 20px;
     padding: 0;

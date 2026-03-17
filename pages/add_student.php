@@ -99,103 +99,20 @@ $conn->close();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Add New Student</title>
-    <link rel="stylesheet" href="../css/common.css">
-    <link rel="stylesheet" href="../css/enhancements.css">
-    <link rel="stylesheet" href="../css/details.css">
-    <script src="../js/app.js" defer></script>
-    <style>
-        .add-student-form {
-            max-width: 700px;
-            margin: 0 auto;
-        }
-        .form-row {
-            display: flex;
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-        .form-group {
-            flex: 1;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 6px;
-            font-weight: 500;
-            color: #495057;
-            font-size: 14px;
-        }
-        .form-group input,
-        .form-group select,
-        .form-group textarea {
-            width: 100%;
-            padding: 10px 12px;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
-            font-size: 14px;
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        .form-group input:focus,
-        .form-group select:focus,
-        .form-group textarea:focus {
-            outline: none;
-            border-color: #0066cc;
-            box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
-        }
-        .form-group textarea {
-            resize: vertical;
-            min-height: 80px;
-        }
-        .form-section {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 25px;
-        }
-        .form-section h3 {
-            margin: 0 0 15px 0;
-            font-size: 16px;
-            color: #343a40;
-            border-bottom: 1px solid #dee2e6;
-            padding-bottom: 10px;
-        }
-        .form-actions .btn {
-            padding: 12px 30px;
-            font-size: 15px;
-        }
-        .message {
-            padding: 15px 20px;
-            border-radius: 8px;
-            margin-bottom: 25px;
-            font-size: 14px;
-        }
-        .message.success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        .message.error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        .form-actions {
-            display: flex;
-            gap: 15px;
-            justify-content: flex-end;
-            margin-top: 25px;
-            padding-top: 20px;
-            border-top: 1px solid #e9ecef;
-        }
-        .required {
-            color: #dc3545;
-        }
-    </style>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css', '../')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/details.css', '../')); ?>">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <script src="<?php echo htmlspecialchars(app_asset('js/app.js', '../')); ?>" defer></script>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/forms_bundle.css', '../')); ?>">
 </head>
-<body>
+<body class="has-sidebar page-add-student">
+    <?php require_once '../config/sidebar.php'; ?>
+    <?php renderAppSidebar(['active' => 'students', 'basePath' => '..']); ?>
     <div class="container">
         <header>
             <h1>Add New Student</h1>
             <div class="header-actions">
-                <a href="../index.php" class="btn btn-back">← Back to Student List</a>
+                <a href="../index.php" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Student List</a>
             </div>
         </header>
 
@@ -279,7 +196,7 @@ $conn->close();
 
                 <div class="form-actions">
                     <a href="../index.php" class="btn btn-back">Cancel</a>
-                    <button type="submit" class="btn btn-add" onclick="showSpinner()">Add Student</button>
+                    <button type="submit" class="btn btn-add">Add Student</button>
                 </div>
             </form>
         </div>
@@ -292,10 +209,19 @@ $conn->close();
 
     <script>
         function showSpinner() {
-            const form = document.querySelector('form');
-            if (form.checkValidity()) {
-                document.getElementById('loadingSpinner').classList.add('active');
+            const spinner = document.getElementById('loadingSpinner');
+            if (spinner) {
+                spinner.classList.add('active');
             }
+        }
+
+        const addStudentForm = document.querySelector('.add-student-form');
+        if (addStudentForm) {
+            addStudentForm.addEventListener('submit', function() {
+                if (addStudentForm.checkValidity()) {
+                    showSpinner();
+                }
+            });
         }
     </script>
 

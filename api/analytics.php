@@ -6,15 +6,99 @@
 require_once __DIR__ . '/../config/db_helpers.php';
 require_once __DIR__ . '/../config/finance_helpers.php';
 require_once __DIR__ . '/../config/academic_helpers.php';
+require_once __DIR__ . '/../config/api_response_helpers.php';
 
-header('Content-Type: application/json');
+// Release PHP session lock so concurrent dashboard API requests can run in parallel.
+if (session_status() === PHP_SESSION_ACTIVE) {
+    session_write_close();
+}
 
-$conn = getDBConnection();
+/**
+ * Resolve file cache path for analytics responses.
+ *
+ * @param string $cache_key
+ * @return string|null
+ */
+function getAnalyticsCachePath($cache_key) {
+    $cache_dir = __DIR__ . '/../logs/cache';
+    if (!is_dir($cache_dir) && !mkdir($cache_dir, 0777, true) && !is_dir($cache_dir)) {
+        return null;
+    }
+    return $cache_dir . '/' . $cache_key . '.json';
+}
+
+/**
+ * Read cached analytics response if still fresh.
+ *
+ * @param string $cache_key
+ * @param int $ttl_seconds
+ * @return array|null
+ */
+function readAnalyticsCache($cache_key, $ttl_seconds) {
+    $cache_path = getAnalyticsCachePath($cache_key);
+    if (!$cache_path || !file_exists($cache_path)) {
+        return null;
+    }
+
+    if ((time() - filemtime($cache_path)) > $ttl_seconds) {
+        return null;
+    }
+
+    $raw = @file_get_contents($cache_path);
+    if ($raw === false || $raw === '') {
+        return null;
+    }
+
+    $decoded = json_decode($raw, true);
+    return json_last_error() === JSON_ERROR_NONE ? $decoded : null;
+}
+
+/**
+ * Write analytics response to file cache.
+ *
+ * @param string $cache_key
+ * @param array $payload
+ * @return void
+ */
+function writeAnalyticsCache($cache_key, $payload) {
+    $cache_path = getAnalyticsCachePath($cache_key);
+    if (!$cache_path) {
+        return;
+    }
+
+    @file_put_contents($cache_path, json_encode($payload), LOCK_EX);
+}
 
 // Get parameters
 $report_type = $_GET['type'] ?? 'overview';
 $academic_year = $_GET['ay'] ?? null;
 $semester = isset($_GET['sem']) ? intval($_GET['sem']) : null;
+
+$allowed_reports = ['overview', 'enrollment', 'grades', 'retention', 'revenue', 'standings'];
+if (!in_array($report_type, $allowed_reports, true)) {
+    api_respond_error(
+        'Invalid report type',
+        422,
+        'invalid_report_type',
+        ['allowed_reports' => $allowed_reports]
+    );
+}
+
+$force_refresh = isset($_GET['refresh']) && $_GET['refresh'] === '1';
+$cache_ttl_seconds = 45;
+$cache_key = 'analytics_' . sha1($report_type . '|' . ($academic_year ?: 'auto') . '|' . ($semester === null ? 'all' : $semester));
+
+if (!$force_refresh) {
+    $cached = readAnalyticsCache($cache_key, $cache_ttl_seconds);
+    if ($cached !== null) {
+        api_respond_success($cached, 200, [
+            'report_type' => $report_type,
+            'cached' => true,
+        ]);
+    }
+}
+
+$conn = getDBConnection();
 
 // Get current academic year from settings if not specified
 if (!$academic_year) {
@@ -44,12 +128,28 @@ switch ($report_type) {
     case 'standings':
         $response = getAcademicStandingStats($conn, $academic_year, $semester);
         break;
-    default:
-        $response = ['error' => 'Invalid report type'];
 }
 
 $conn->close();
-echo json_encode($response);
+
+if (is_array($response) && array_key_exists('error', $response)) {
+    api_respond_error(
+        'Failed to generate analytics report',
+        500,
+        'analytics_generation_failed',
+        ['report_type' => $report_type, 'details' => $response['error']],
+        ['report_type' => $report_type, 'cached' => false]
+    );
+}
+
+if (!isset($response['error'])) {
+    writeAnalyticsCache($cache_key, $response);
+}
+
+api_respond_success($response, 200, [
+    'report_type' => $report_type,
+    'cached' => false,
+]);
 
 // ============================================================
 // REPORT FUNCTIONS
@@ -96,20 +196,17 @@ function getOverviewStats($conn, $ay, $sem) {
     // Financial summary
     $stats['financials'] = getFinancialSummary($conn, $ay, $sem);
     
-    // Quick stats for current term
-    $enrolled_sql = "SELECT COUNT(DISTINCT student_id) as count 
-                     FROM enrollments WHERE academic_year = ? AND status = 'Enrolled'";
-    $stats['quick_stats']['enrolled_this_term'] = db_fetch_one(db_query($conn, $enrolled_sql, 's', [$ay]))['count'] ?? 0;
-    
-    // Dean's list count
-    $deans_sql = "SELECT COUNT(*) as count FROM academic_standings 
-                  WHERE academic_year = ? AND standing = 'Dean''s List'";
-    $stats['quick_stats']['deans_list'] = db_fetch_one(db_query($conn, $deans_sql, 's', [$ay]))['count'] ?? 0;
-    
-    // Probation count
-    $prob_sql = "SELECT COUNT(*) as count FROM academic_standings 
-                 WHERE academic_year = ? AND standing IN ('Probation', 'Warning')";
-    $stats['quick_stats']['at_risk'] = db_fetch_one(db_query($conn, $prob_sql, 's', [$ay]))['count'] ?? 0;
+    // Quick stats for current term (single DB round-trip).
+    $quick_stats_sql = "SELECT
+        (SELECT COUNT(DISTINCT student_id) FROM enrollments WHERE academic_year = ? AND status = 'Enrolled') as enrolled_this_term,
+        (SELECT COUNT(*) FROM academic_standings WHERE academic_year = ? AND standing = 'Dean''s List') as deans_list,
+        (SELECT COUNT(*) FROM academic_standings WHERE academic_year = ? AND standing IN ('Probation', 'Warning')) as at_risk";
+    $quick_stats = db_fetch_one(db_query($conn, $quick_stats_sql, 'sss', [$ay, $ay, $ay])) ?: [];
+    $stats['quick_stats'] = [
+        'enrolled_this_term' => intval($quick_stats['enrolled_this_term'] ?? 0),
+        'deans_list' => intval($quick_stats['deans_list'] ?? 0),
+        'at_risk' => intval($quick_stats['at_risk'] ?? 0),
+    ];
     
     return $stats;
 }
@@ -313,14 +410,14 @@ function getRevenueStats($conn, $ay, $sem) {
         'late_fees' => []
     ];
     
-    // Get fee configuration
-    $tuition_rate = 0;
-    $total_fixed = 0;
-    $res = db_query($conn, "SELECT * FROM fees");
-    while($row = $res->fetch_assoc()) {
-        if ($row['code'] === 'TUITION') $tuition_rate = floatval($row['amount']);
-        elseif ($row['type'] === 'fixed') $total_fixed += floatval($row['amount']);
-    }
+    // Get fee configuration in one query.
+    $fee_sql = "SELECT
+        MAX(CASE WHEN code = 'TUITION' THEN amount END) as tuition_rate,
+        COALESCE(SUM(CASE WHEN type = 'fixed' AND code <> 'TUITION' THEN amount ELSE 0 END), 0) as total_fixed
+        FROM fees";
+    $fee_config = db_fetch_one(db_query($conn, $fee_sql)) ?: [];
+    $tuition_rate = floatval($fee_config['tuition_rate'] ?? 0);
+    $total_fixed = floatval($fee_config['total_fixed'] ?? 0);
     
     // Current term summary
     $sem_condition = $sem ? " AND c.semester = $sem" : "";

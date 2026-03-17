@@ -1,16 +1,29 @@
 <?php
 // api/check_student_conflicts.php
 require_once __DIR__ . '/../config/db_helpers.php';
-header('Content-Type: application/json');
+require_once __DIR__ . '/../config/api_response_helpers.php';
 
 if (!isset($_GET['student_id']) || !isset($_GET['ay'])) {
-    echo json_encode(['error' => 'Missing params']);
-    exit;
+    api_respond_error(
+        'Missing required parameters',
+        422,
+        'missing_params',
+        ['required' => ['student_id', 'ay']]
+    );
+}
+
+$student_id = intval($_GET['student_id']);
+$ay = trim((string)$_GET['ay']);
+
+if ($student_id <= 0) {
+    api_respond_error('Invalid student id', 422, 'invalid_student_id');
+}
+
+if ($ay === '') {
+    api_respond_error('Invalid academic year', 422, 'invalid_academic_year');
 }
 
 $conn = getDBConnection();
-$student_id = intval($_GET['student_id']);
-$ay = $_GET['ay'];
 
 // Fetch Enrolled Schedule
 $sql = "SELECT s.*, c.course_code 
@@ -20,7 +33,13 @@ $sql = "SELECT s.*, c.course_code
         WHERE e.student_id = ? AND e.academic_year = ? AND e.status = 'Enrolled'
         ORDER BY s.day_of_week, s.start_time";
 
-$schedules = db_fetch_all(db_query($conn, $sql, 'is', [$student_id, $ay]));
+$schedule_result = db_query($conn, $sql, 'is', [$student_id, $ay]);
+if ($schedule_result === false) {
+    $conn->close();
+    api_respond_error('Unable to load schedule data', 500, 'schedule_query_failed');
+}
+
+$schedules = db_fetch_all($schedule_result);
 
 $conflicts = [];
 function isOverlap($s1, $s2) {
@@ -43,6 +62,12 @@ for ($i = 0; $i < $count; $i++) {
     }
 }
 
-echo json_encode(['conflicts' => $conflicts]);
 $conn->close();
+api_respond_success([
+    'conflicts' => $conflicts,
+    'count' => count($conflicts)
+], 200, [
+    'student_id' => $student_id,
+    'academic_year' => $ay
+]);
 ?>

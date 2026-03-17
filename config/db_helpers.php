@@ -108,6 +108,43 @@ function clearCache() {
 }
 
 /**
+ * Normalize asset URL prefix (for example '' or '../').
+ * @param string $prefix
+ * @return string
+ */
+function normalizeAssetUrlPrefix($prefix) {
+    $prefix = trim((string)$prefix);
+    if ($prefix === '') {
+        return '';
+    }
+
+    return rtrim(str_replace('\\', '/', $prefix), '/') . '/';
+}
+
+/**
+ * Build a versioned asset URL using filemtime for cache busting.
+ * @param string $assetPath Workspace-relative asset path from project root (e.g. css/common.css)
+ * @param string $urlPrefix URL prefix for the current page location (e.g. ../)
+ * @return string
+ */
+function app_asset($assetPath, $urlPrefix = '') {
+    static $assetVersionCache = [];
+
+    $assetPath = ltrim(str_replace('\\', '/', (string)$assetPath), '/');
+    if ($assetPath === '') {
+        return '';
+    }
+
+    if (!array_key_exists($assetPath, $assetVersionCache)) {
+        $fullPath = dirname(__DIR__) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $assetPath);
+        $assetVersionCache[$assetPath] = is_file($fullPath) ? (string)filemtime($fullPath) : '0';
+    }
+
+    $prefix = normalizeAssetUrlPrefix($urlPrefix);
+    return $prefix . $assetPath . '?v=' . rawurlencode($assetVersionCache[$assetPath]);
+}
+
+/**
  * Execute multiple queries in a transaction
  * @param mysqli $conn Database connection
  * @param callable $callback Function containing queries to execute

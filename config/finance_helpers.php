@@ -69,6 +69,192 @@ function getAvailableOverpaymentCredit($conn, $student_id) {
 }
 
 /**
+ * Get available overpayment credits for multiple students in one query.
+ *
+ * @param mysqli $conn Database connection
+ * @param array $student_ids Student IDs
+ * @return array Map of student_id => available credit
+ */
+function getAvailableOverpaymentCreditsBatch($conn, $student_ids) {
+    $student_ids = array_values(array_filter(array_map('intval', $student_ids), function($id) {
+        return $id > 0;
+    }));
+
+    if (empty($student_ids)) {
+        return [];
+    }
+
+    $credits = array_fill_keys($student_ids, 0.0);
+    $placeholders = implode(',', array_fill(0, count($student_ids), '?'));
+    $types = str_repeat('i', count($student_ids));
+
+    $sql = "SELECT student_id, SUM(amount) as total
+            FROM term_overpayments
+            WHERE is_applied = 0 AND student_id IN ($placeholders)
+            GROUP BY student_id";
+
+    $result = db_query($conn, $sql, $types, $student_ids);
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $sid = intval($row['student_id']);
+            $credits[$sid] = $row['total'] ? floatval($row['total']) : 0.0;
+        }
+    }
+
+    return $credits;
+}
+
+/**
+ * Calculate balances for multiple students in batch.
+ * Mirrors getStudentBalance() logic but avoids per-student N+1 queries.
+ *
+ * @param mysqli $conn Database connection
+ * @param array $student_program_map Map of student_id => program_id
+ * @return array Map of student_id => balance
+ */
+function getStudentBalancesBatch($conn, $student_program_map) {
+    if (!is_array($student_program_map) || empty($student_program_map)) {
+        return [];
+    }
+
+    $normalized_program_map = [];
+    foreach ($student_program_map as $student_id => $program_id) {
+        $sid = intval($student_id);
+        if ($sid <= 0) {
+            continue;
+        }
+        $normalized_program_map[$sid] = $program_id !== null ? intval($program_id) : null;
+    }
+
+    if (empty($normalized_program_map)) {
+        return [];
+    }
+
+    $student_ids = array_keys($normalized_program_map);
+    $balances = array_fill_keys($student_ids, 0.0);
+
+    // Fetch base fee configuration once.
+    $base_tuition_rate = 800.00;
+    $base_lab_fee = 2000.00;
+    $fixed_fees_excluding_lab = 0.0;
+
+    $fee_sql = "SELECT code, type, amount FROM fees WHERE type = 'fixed' OR code IN ('TUITION', 'LAB')";
+    $fees_result = db_query($conn, $fee_sql);
+    if ($fees_result) {
+        while ($row = $fees_result->fetch_assoc()) {
+            $amount = floatval($row['amount']);
+            if ($row['code'] === 'TUITION' && $row['type'] === 'per_unit') {
+                $base_tuition_rate = $amount;
+            }
+            if ($row['code'] === 'LAB') {
+                $base_lab_fee = $amount;
+            }
+            if ($row['type'] === 'fixed' && $row['code'] !== 'LAB') {
+                $fixed_fees_excluding_lab += $amount;
+            }
+        }
+    }
+
+    // Build program-specific rate map in one query, falling back to base rates.
+    $program_ids = array_values(array_unique(array_filter(array_map('intval', array_values($normalized_program_map)), function($id) {
+        return $id > 0;
+    })));
+
+    $rates_by_program = [];
+    foreach ($program_ids as $pid) {
+        $rates_by_program[$pid] = [
+            'tuition_per_unit' => $base_tuition_rate,
+            'lab_fee' => $base_lab_fee
+        ];
+    }
+
+    if (!empty($program_ids)) {
+        $program_placeholders = implode(',', array_fill(0, count($program_ids), '?'));
+        $program_types = str_repeat('i', count($program_ids));
+
+        $rate_sql = "SELECT ptr.program_id, ptr.tuition_per_unit, ptr.lab_fee
+                     FROM program_tuition_rates ptr
+                     INNER JOIN (
+                        SELECT program_id, MAX(effective_date) AS latest_effective
+                        FROM program_tuition_rates
+                        WHERE is_active = 1 AND program_id IN ($program_placeholders)
+                        GROUP BY program_id
+                     ) latest
+                        ON latest.program_id = ptr.program_id
+                        AND latest.latest_effective = ptr.effective_date
+                     WHERE ptr.is_active = 1";
+
+        $rate_result = db_query($conn, $rate_sql, $program_types, $program_ids);
+        if ($rate_result) {
+            while ($row = $rate_result->fetch_assoc()) {
+                $pid = intval($row['program_id']);
+                $rates_by_program[$pid] = [
+                    'tuition_per_unit' => floatval($row['tuition_per_unit']),
+                    'lab_fee' => floatval($row['lab_fee'])
+                ];
+            }
+        }
+    }
+
+    // Aggregate all enrolled units per student per term.
+    $student_placeholders = implode(',', array_fill(0, count($student_ids), '?'));
+    $included_statuses = ['Enrolled', 'Passed', 'Failed', 'Dropped'];
+    $status_placeholders = implode(',', array_fill(0, count($included_statuses), '?'));
+    $term_types = str_repeat('i', count($student_ids)) . str_repeat('s', count($included_statuses));
+    $term_params = array_merge($student_ids, $included_statuses);
+
+    $term_sql = "SELECT e.student_id, e.academic_year, c.semester, SUM(c.units) as total_units
+                 FROM enrollments e
+                 JOIN curriculum c ON e.curriculum_id = c.curriculum_id
+                 WHERE e.student_id IN ($student_placeholders)
+                 AND e.status IN ($status_placeholders)
+                 GROUP BY e.student_id, e.academic_year, c.semester";
+
+    $assessment_by_student = array_fill_keys($student_ids, 0.0);
+    $term_result = db_query($conn, $term_sql, $term_types, $term_params);
+    if ($term_result) {
+        while ($row = $term_result->fetch_assoc()) {
+            $sid = intval($row['student_id']);
+            $units = $row['total_units'] ? floatval($row['total_units']) : 0.0;
+            if ($units <= 0 || !isset($assessment_by_student[$sid])) {
+                continue;
+            }
+
+            $program_id = isset($normalized_program_map[$sid]) ? intval($normalized_program_map[$sid]) : 0;
+            $rates = ($program_id > 0 && isset($rates_by_program[$program_id]))
+                ? $rates_by_program[$program_id]
+                : ['tuition_per_unit' => $base_tuition_rate, 'lab_fee' => $base_lab_fee];
+
+            $term_tuition = $units * $rates['tuition_per_unit'];
+            $term_misc = $fixed_fees_excluding_lab + $rates['lab_fee'];
+            $assessment_by_student[$sid] += ($term_tuition + $term_misc);
+        }
+    }
+
+    // Aggregate total payments once for all students.
+    $payment_sql = "SELECT student_id, SUM(amount) as total_paid
+                    FROM payments
+                    WHERE student_id IN ($student_placeholders)
+                    GROUP BY student_id";
+    $payment_result = db_query($conn, $payment_sql, str_repeat('i', count($student_ids)), $student_ids);
+    $payments_by_student = array_fill_keys($student_ids, 0.0);
+    if ($payment_result) {
+        while ($row = $payment_result->fetch_assoc()) {
+            $sid = intval($row['student_id']);
+            if (isset($payments_by_student[$sid])) {
+                $payments_by_student[$sid] = $row['total_paid'] ? floatval($row['total_paid']) : 0.0;
+            }
+        }
+    }
+
+    foreach ($student_ids as $sid) {
+        $balances[$sid] = $assessment_by_student[$sid] - $payments_by_student[$sid];
+    }
+
+    return $balances;
+}
+
+/**
  * Get overpayment details for display
  * 
  * @param mysqli $conn Database connection

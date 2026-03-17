@@ -1,6 +1,7 @@
 <?php
 require_once '../config/db_helpers.php';
 require_once '../config/academic_helpers.php';
+require_once '../config/sidebar.php';
 
 $student_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 if ($student_id <= 0) {
@@ -796,6 +797,13 @@ function getGradeClass($grade) {
     if ($grade <= 3.00) return 'grade-pass';
     return 'grade-fail';
 }
+
+$student_list_url = getStudentListReturnUrl('..');
+$records_home_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id . '&tab=schedule', $student_list_url);
+$personal_info_url = appendReturnParam('student_personal.php?id=' . $student_id, $student_list_url);
+$edit_grades_url = appendReturnParam('edit_grades.php?id=' . $student_id, $student_list_url);
+$encoded_return = rawurlencode($student_list_url);
+
 // --- AJAX HANDLER ---
 $is_ajax = isset($_GET['ajax']) && $_GET['ajax'] === '1';
 
@@ -807,41 +815,37 @@ if (!$is_ajax) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Student Records - <?php echo htmlspecialchars($student['first_name'] . ' ' . $student['last_name']); ?></title>
-    <link rel="stylesheet" href="../css/common.css">
-    <link rel="stylesheet" href="../css/enhancements.css">
-    <link rel="stylesheet" href="../css/details.css">
-    <script src="../js/app.js" defer></script>
-    <style>
-        .student-details {
-            background: var(--bg-card);
-            padding: 30px;
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-premium);
-            border: 1px solid rgba(255,255,255,0.5);
-        }
-        .tabs { display: flex; border-bottom: 2px solid var(--border-color); margin-bottom: 20px; }
-        .tab-link { padding: 10px 20px; text-decoration: none; color: var(--text-muted); font-weight: 600; border-bottom: 3px solid transparent; transition: all 0.3s; }
-        .tab-link:hover { color: var(--text-main); background: #f9fafb; }
-        .tab-link.active { color: var(--primary); border-bottom-color: var(--primary); }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; animation: fadeIn 0.3s; }
-        
-        .clickable-row { cursor: pointer; transition: background-color 0.2s; }
-        .clickable-row:hover { background-color: #f1f8ff; }
-        
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-    </style>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css', '../')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/details.css', '../')); ?>">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <script src="<?php echo htmlspecialchars(app_asset('js/app.js', '../')); ?>" defer></script>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/forms_bundle.css', '../')); ?>">
 </head>
-<body>
+<body class="has-sidebar page-student-schedule-grades">
+    <?php renderAppSidebar(['active' => 'students', 'basePath' => '..']); ?>
     <div class="container">
         <header>
             <h1>Student Records</h1>
             <div class="header-actions">
-                <a href="../index.php" class="btn btn-back">← Back to Student List</a>
-                <a href="student_personal.php?id=<?php echo $student_id; ?>" class="btn btn-info">Personal Info</a>
-                <a href="edit_grades.php?id=<?php echo $student_id; ?>" class="btn btn-edit js-edit-grades-btn" style="display: <?php echo $active_tab === 'grades' ? 'inline-flex' : 'none'; ?>;">Edit Grades</a>
+                <a href="<?php echo htmlspecialchars($student_list_url); ?>" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Student List</a>
+                <a href="<?php echo htmlspecialchars($personal_info_url); ?>" class="btn btn-info"><i class="bi bi-person-vcard" aria-hidden="true"></i>Personal Info</a>
+                <a href="<?php echo htmlspecialchars($edit_grades_url); ?>" class="btn btn-edit js-edit-grades-btn" style="display: <?php echo $active_tab === 'grades' ? 'inline-flex' : 'none'; ?>;"><i class="bi bi-pencil-square" aria-hidden="true"></i>Edit Grades</a>
             </div>
         </header>
+
+        <?php
+        $tab_label_map = [
+            'schedule' => 'Class Schedule',
+            'grades' => 'Grades',
+            'academic' => 'Academic Standing',
+        ];
+        $active_tab_label = $tab_label_map[$active_tab] ?? 'Records';
+        renderPageBreadcrumbs([
+            ['label' => 'Students', 'href' => $student_list_url],
+            ['label' => 'Student Records', 'href' => $records_home_url],
+            ['label' => $active_tab_label]
+        ]);
+        ?>
 
 <?php } ?>
 
@@ -864,9 +868,9 @@ if (!$is_ajax) {
 
             <!-- Tabs -->
             <div class="tabs">
-                <a href="?id=<?php echo $student_id; ?>&tab=schedule&academic_year=<?php echo urlencode($selected_ay); ?>&year=<?php echo $selected_year; ?>&semester=<?php echo $selected_semester; ?>" class="tab-link <?php echo $active_tab === 'schedule' ? 'active' : ''; ?>" onclick="handleTabClick(event, this.href)">Class Schedule</a>
-                <a href="?id=<?php echo $student_id; ?>&tab=grades&academic_year=<?php echo urlencode($selected_ay); ?>&year=<?php echo $selected_year; ?>&semester=<?php echo $selected_semester; ?>" class="tab-link <?php echo $active_tab === 'grades' ? 'active' : ''; ?>" onclick="handleTabClick(event, this.href)">Grades</a>
-                <a href="?id=<?php echo $student_id; ?>&tab=academic&academic_year=<?php echo urlencode($selected_ay); ?>&year=<?php echo $selected_year; ?>&semester=<?php echo $selected_semester; ?>" class="tab-link <?php echo $active_tab === 'academic' ? 'active' : ''; ?>" onclick="handleTabClick(event, this.href)">Academic Standing</a>
+                <a href="?id=<?php echo $student_id; ?>&tab=schedule&academic_year=<?php echo urlencode($selected_ay); ?>&year=<?php echo $selected_year; ?>&semester=<?php echo $selected_semester; ?>&return=<?php echo $encoded_return; ?>" class="tab-link <?php echo $active_tab === 'schedule' ? 'active' : ''; ?>">Class Schedule</a>
+                <a href="?id=<?php echo $student_id; ?>&tab=grades&academic_year=<?php echo urlencode($selected_ay); ?>&year=<?php echo $selected_year; ?>&semester=<?php echo $selected_semester; ?>&return=<?php echo $encoded_return; ?>" class="tab-link <?php echo $active_tab === 'grades' ? 'active' : ''; ?>">Grades</a>
+                <a href="?id=<?php echo $student_id; ?>&tab=academic&academic_year=<?php echo urlencode($selected_ay); ?>&year=<?php echo $selected_year; ?>&semester=<?php echo $selected_semester; ?>&return=<?php echo $encoded_return; ?>" class="tab-link <?php echo $active_tab === 'academic' ? 'active' : ''; ?>">Academic Standing</a>
             </div>
 
             <!-- Filter Section (Shared but preserves state) -->
@@ -876,7 +880,7 @@ if (!$is_ajax) {
                     <input type="hidden" name="tab" value="<?php echo htmlspecialchars($active_tab); ?>">
                     
                     <label for="termSelect">Academic Term (Year/Sem):</label>
-                    <select id="termSelect" class="sort-select" onchange="applyTermFilter(this.value)">
+                    <select id="termSelect" class="sort-select">
                          <option value="||" <?php echo $is_all_terms ? 'selected' : ''; ?>>All Terms</option>
                         <?php foreach($terms_options as $key => $opt): ?>
                             <?php 
@@ -911,19 +915,15 @@ if (!$is_ajax) {
 
                             // Construct URL
                             const studentId = '<?php echo $student_id; ?>';
+                            const returnParam = '<?php echo $encoded_return; ?>';
                             
                             // Get current tab from URL to avoid resetting to initial tab
                             const urlParams = new URLSearchParams(window.location.search);
                             // Default to 'schedule' if not set, or preserve current
                             const activeTab = urlParams.get('tab') || 'schedule';
                             
-                            const url = `?id=${studentId}&tab=${activeTab}&academic_year=${encodeURIComponent(ay)}&year=${yr}&semester=${sem}`;
+                            const url = `?id=${studentId}&tab=${activeTab}&academic_year=${encodeURIComponent(ay)}&year=${yr}&semester=${sem}&return=${returnParam}`;
                             
-                            loadContent(url);
-                        }
-
-                        function handleTabClick(e, url) {
-                            e.preventDefault();
                             loadContent(url);
                         }
 
@@ -973,11 +973,63 @@ if (!$is_ajax) {
                                 })
                                 .catch(err => {
                                     console.error('Error loading content:', err);
-                                    alert('Failed to load data. Please refresh the page.');
+                                    if (window.StudentApp && window.StudentApp.Toast) {
+                                        window.StudentApp.Toast.show('Failed to load data. Please refresh the page.', 'error', 2800);
+                                    } else {
+                                        alert('Failed to load data. Please refresh the page.');
+                                    }
                                     container.style.opacity = '1';
                                     container.style.pointerEvents = 'auto';
                                 });
                         }
+
+                        document.addEventListener('change', (event) => {
+                            if (event.target && event.target.id === 'termSelect') {
+                                applyTermFilter(event.target.value);
+                            }
+                        });
+
+                        document.addEventListener('click', (event) => {
+                            const tabLink = event.target.closest('.tabs .tab-link');
+                            if (tabLink) {
+                                event.preventDefault();
+                                loadContent(tabLink.href);
+                                return;
+                            }
+
+                            const scheduleAction = event.target.closest('[data-schedule-action]');
+                            if (scheduleAction) {
+                                const action = scheduleAction.getAttribute('data-schedule-action');
+                                if (action === 'check-conflicts') {
+                                    checkStudentConflicts();
+                                    return;
+                                }
+
+                                if (action === 'close-conflict-modal') {
+                                    closeConflictModal();
+                                    return;
+                                }
+
+                                if (action === 'close-class-modal') {
+                                    closeClassModal();
+                                    return;
+                                }
+                            }
+
+                            const clickableRow = event.target.closest('tr.clickable-row[data-curriculum-id]');
+                            if (!clickableRow) {
+                                return;
+                            }
+
+                            if (event.target.closest('.row-action-cell, .inline-form, button, a, input, select, textarea')) {
+                                return;
+                            }
+
+                            openClassModal(
+                                clickableRow.getAttribute('data-curriculum-id'),
+                                clickableRow.getAttribute('data-academic-year') || ''
+                            );
+                        });
                     </script>
 
                     
@@ -994,9 +1046,9 @@ if (!$is_ajax) {
                          <div class="section-header mb-sm">
                             <h3>Class Schedule - <?php echo $selected_ay ? htmlspecialchars($selected_ay) . ' / ' : ''; ?>Year <?php echo $selected_year; ?><?php echo $selected_semester > 0 ? ' (Semester ' . $selected_semester . ')' : ''; ?></h3>
                             <div class="actions-group">
-                                <button onclick="checkStudentConflicts()" class="btn btn-conflict-check">Check Conflicts</button>
+                                <button type="button" data-schedule-action="check-conflicts" class="btn btn-conflict-check">Check Conflicts</button>
                                 <?php if (!$is_all_terms && $selected_year > 0 && $selected_semester > 0): ?>
-                                    <form method="post" action="" style="display:inline-block;" onsubmit="return confirm('Are you sure you want to DROP ALL subjects for this semester? This action cannot be undone.');">
+                                    <form method="post" action="" style="display:inline-block;" data-confirm="Are you sure you want to DROP ALL subjects for this semester? This action cannot be undone." data-confirm-title="Drop All Subjects" data-confirm-text="Drop All" data-confirm-style="danger">
                                         <input type="hidden" name="action" value="drop_all">
                                         <input type="hidden" name="student_id" value="<?php echo $student_id; ?>">
                                         <input type="hidden" name="academic_year" value="<?php echo htmlspecialchars($selected_ay); ?>">
@@ -1023,7 +1075,7 @@ if (!$is_ajax) {
                                 </thead>
                                 <tbody>
                                     <?php foreach ($grouped_schedules as $cid => $course): ?>
-                                        <tr class="clickable-row" onclick="openClassModal(<?php echo $cid; ?>, '<?php echo htmlspecialchars($course['academic_year']); ?>')">
+                                        <tr class="clickable-row" data-curriculum-id="<?php echo $cid; ?>" data-academic-year="<?php echo htmlspecialchars($course['academic_year']); ?>">
                                             <td><?php echo htmlspecialchars($course['course_code']); ?></td>
                                             <td><?php echo htmlspecialchars($course['course_name']); ?></td>
                                             <td>
@@ -1034,8 +1086,8 @@ if (!$is_ajax) {
                                             <td><?php echo htmlspecialchars($course['meetings'][0]['room'] ?? 'TBA'); ?></td>
                                             <td><?php echo htmlspecialchars($course['meetings'][0]['instructor'] ?? 'TBA'); ?></td>
                                             <td><?php echo htmlspecialchars($course['units']); ?></td>
-                                            <td onclick="event.stopPropagation();">
-                                                <form method="post" class="inline-form" onsubmit="return confirm('Drop <?php echo $course['course_code']; ?>?');">
+                                            <td class="row-action-cell">
+                                                <form method="post" class="inline-form" data-confirm="Drop <?php echo htmlspecialchars($course['course_code']); ?>?" data-confirm-title="Drop Course" data-confirm-text="Drop" data-confirm-style="danger">
                                                     <input type="hidden" name="action" value="drop">
                                                     <input type="hidden" name="student_id" value="<?php echo $student_id; ?>">
                                                     <input type="hidden" name="curriculum_id" value="<?php echo $cid; ?>">
@@ -1077,7 +1129,7 @@ if (!$is_ajax) {
                                             <td><?php echo htmlspecialchars($course['units']); ?></td>
                                             <td><?php echo htmlspecialchars($course['description'] ?? ''); ?></td>
                                             <td>
-                                                 <form method="post" class="inline-form" onsubmit="return confirm('Drop <?php echo $course['course_code']; ?>?');">
+                                                 <form method="post" class="inline-form" data-confirm="Drop <?php echo htmlspecialchars($course['course_code']); ?>?" data-confirm-title="Drop Course" data-confirm-text="Drop" data-confirm-style="danger">
                                                     <input type="hidden" name="action" value="drop">
                                                     <input type="hidden" name="student_id" value="<?php echo $student_id; ?>">
                                                     <input type="hidden" name="curriculum_id" value="<?php echo $course['curriculum_id']; ?>">
@@ -1097,7 +1149,7 @@ if (!$is_ajax) {
                         <div class="available-section">
                             <div class="section-header mb-sm">
                                 <h3>Available Courses to Enroll (Year <?php echo $selected_year; ?>, Sem <?php echo $selected_semester; ?>)</h3>
-                                <form method="post" class="inline-form" onsubmit="return confirm('Enroll in ALL available courses?');">
+                                <form method="post" class="inline-form" data-confirm="Enroll in ALL available courses?" data-confirm-title="Enroll All Available" data-confirm-text="Enroll All" data-confirm-style="primary">
                                     <input type="hidden" name="action" value="enroll_all">
                                     <input type="hidden" name="student_id" value="<?php echo $student_id; ?>">
                                     <input type="hidden" name="academic_year" value="<?php echo htmlspecialchars($selected_ay); ?>">
@@ -1146,7 +1198,7 @@ if (!$is_ajax) {
 
                     <?php if (!empty($conflicts)): ?>
                         <div class="conflict-warning">
-                            <strong>⚠ Schedule Conflict Detected!</strong>
+                            <strong class="conflict-warning-title"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>Schedule Conflict Detected!</strong>
                             <ul>
                                 <?php foreach ($conflicts as $conf): ?>
                                     <li>
@@ -1411,7 +1463,7 @@ if (!$is_ajax) {
             <p>Scanning...</p>
         </div>
         <div class="modal-footer">
-            <button onclick="closeConflictModal()" class="btn btn-secondary">Close</button>
+            <button type="button" data-schedule-action="close-conflict-modal" class="btn btn-secondary">Close</button>
         </div>
     </div>
 </div>
@@ -1421,7 +1473,7 @@ if (!$is_ajax) {
     <div class="modal">
         <div class="modal-header">
             <h3 id="classModalTitle">Class Details</h3>
-            <button onclick="closeClassModal()" class="modal-close">&times;</button>
+            <button type="button" data-schedule-action="close-class-modal" class="modal-close">&times;</button>
         </div>
         
         <div id="classModalContent">
@@ -1429,7 +1481,7 @@ if (!$is_ajax) {
         </div>
         
         <div class="modal-footer">
-            <button onclick="closeClassModal()" class="btn btn-secondary">Close</button>
+            <button type="button" data-schedule-action="close-class-modal" class="btn btn-secondary">Close</button>
         </div>
     </div>
 </div>
@@ -1455,12 +1507,18 @@ if (!$is_ajax) {
 
         try {
             const response = await fetch(`../api/get_class_details.php?curriculum_id=${curriculumId}&ay=${ay}`);
-            const data = await response.json();
-            
-            if (data.error) {
-                content.innerHTML = `<p style="color:red">${data.error}</p>`;
+            const payload = await response.json();
+            const fallbackError = 'Unable to load class details.';
+
+            if (!response.ok || !payload || payload.success !== true) {
+                const errMsg = payload && payload.error
+                    ? (typeof payload.error === 'string' ? payload.error : (payload.error.message || fallbackError))
+                    : fallbackError;
+                content.innerHTML = `<p style="color:red">${errMsg}</p>`;
                 return;
             }
+
+            const data = payload.data || {};
             
             title.innerText = `${data.course_code} - ${data.course_name}`;
             
@@ -1548,14 +1606,24 @@ if (!$is_ajax) {
             const ay = "<?php echo $selected_ay; ?>";
             
             const response = await fetch(`../api/check_student_conflicts.php?student_id=${studentId}&ay=${ay}`);
-            const data = await response.json();
-            
-            if (!data.conflicts || data.conflicts.length === 0) {
+            const payload = await response.json();
+            const fallbackError = 'Unable to check schedule conflicts.';
+
+            if (!response.ok || !payload || payload.success !== true) {
+                const errMsg = payload && payload.error
+                    ? (typeof payload.error === 'string' ? payload.error : (payload.error.message || fallbackError))
+                    : fallbackError;
+                throw new Error(errMsg);
+            }
+
+            const conflicts = Array.isArray(payload.data && payload.data.conflicts) ? payload.data.conflicts : [];
+
+            if (!conflicts || conflicts.length === 0) {
                 content.innerHTML = '<div class="message success" style="padding:10px; background:#d4edda; color:#155724; border-radius:4px;">No conflicts detected in this schedule.</div>';
             } else {
-                let html = `<div class="message error" style="padding:10px; background:#f8d7da; color:#721c24; border-radius:4px; margin-bottom:15px;">Found ${data.conflicts.length} overlap(s).</div>`;
+                let html = `<div class="message error" style="padding:10px; background:#f8d7da; color:#721c24; border-radius:4px; margin-bottom:15px;">Found ${conflicts.length} overlap(s).</div>`;
                 html += '<ul style="padding-left:20px;">';
-                data.conflicts.forEach(c => {
+                conflicts.forEach(c => {
                     html += `<li style="margin-bottom:5px;"><strong>${c.day}</strong>: ${c.s1} (${c.t1}) <br> overlaps with ${c.s2} (${c.t2})</li>`;
                 });
                 html += '</ul>';
@@ -1568,10 +1636,10 @@ if (!$is_ajax) {
     }
     
     // Close modal on outside click
-    window.onclick = function(event) {
+    window.addEventListener('click', function(event) {
         if (event.target == conflictModal) closeConflictModal();
         if (event.target == classModal) closeClassModal();
-    }
+    });
 </script>
 
 </body>

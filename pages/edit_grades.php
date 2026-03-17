@@ -1,5 +1,7 @@
 <?php
 require_once '../config/db_helpers.php';
+require_once '../config/sidebar.php';
+require_once '../config/csrf_helpers.php';
 
 $student_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 if ($student_id <= 0) {
@@ -10,6 +12,7 @@ if ($student_id <= 0) {
 $conn = getDBConnection();
 $message = '';
 $message_type = '';
+$csrf_scope = 'edit_grades_' . $student_id;
 
 // Get student data
 $sql = "SELECT s.*, p.program_name, p.program_code 
@@ -35,75 +38,80 @@ if ($selected_semester !== 1 && $selected_semester !== 2) $selected_semester = 0
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $updated = 0;
-    $errors = [];
-    
-    $conn->begin_transaction();
-    
-    try {
-        foreach ($_POST['grades'] as $enrollment_id => $grade_data) {
-            $enrollment_id = intval($enrollment_id);
-            $midterm = trim($grade_data['midterm'] ?? '');
-            $final = trim($grade_data['final'] ?? '');
-            $status = $grade_data['status'] ?? 'Enrolled';
-            
-            // Validate grades (Philippine grading: 1.00 = highest, 5.00 = failed)
-            $midterm_value = null;
-            $final_value = null;
-            
-            if ($midterm !== '') {
-                $midterm_value = floatval($midterm);
-                if ($midterm_value < 1.00 || $midterm_value > 5.00) {
-                    $errors[] = "Invalid midterm grade for enrollment #$enrollment_id. Must be between 1.00 and 5.00.";
-                    continue;
+    if (!csrf_validate_request_token($csrf_scope, 'csrf_token', false)) {
+        $message = 'Invalid or expired security token. Please refresh and try again.';
+        $message_type = 'error';
+    } else {
+        $updated = 0;
+        $errors = [];
+
+        $conn->begin_transaction();
+
+        try {
+            foreach ($_POST['grades'] as $enrollment_id => $grade_data) {
+                $enrollment_id = intval($enrollment_id);
+                $midterm = trim($grade_data['midterm'] ?? '');
+                $final = trim($grade_data['final'] ?? '');
+                $status = $grade_data['status'] ?? 'Enrolled';
+
+                // Validate grades (Philippine grading: 1.00 = highest, 5.00 = failed)
+                $midterm_value = null;
+                $final_value = null;
+
+                if ($midterm !== '') {
+                    $midterm_value = floatval($midterm);
+                    if ($midterm_value < 1.00 || $midterm_value > 5.00) {
+                        $errors[] = "Invalid midterm grade for enrollment #$enrollment_id. Must be between 1.00 and 5.00.";
+                        continue;
+                    }
                 }
-            }
-            
-            if ($final !== '') {
-                $final_value = floatval($final);
-                if ($final_value < 1.00 || $final_value > 5.00) {
-                    $errors[] = "Invalid final grade for enrollment #$enrollment_id. Must be between 1.00 and 5.00.";
-                    continue;
+
+                if ($final !== '') {
+                    $final_value = floatval($final);
+                    if ($final_value < 1.00 || $final_value > 5.00) {
+                        $errors[] = "Invalid final grade for enrollment #$enrollment_id. Must be between 1.00 and 5.00.";
+                        continue;
+                    }
                 }
-            }
-            
-            // Auto-set status based on final grade
-            // Philippine grading: 1.00-3.00 = Passed, 3.01-5.00 = Failed (5.00 is outright fail)
-            if ($final_value !== null) {
-                if ($final_value <= 3.00) {
-                    $status = 'Passed';
+
+                // Auto-set status based on final grade
+                // Philippine grading: 1.00-3.00 = Passed, 3.01-5.00 = Failed (5.00 is outright fail)
+                if ($final_value !== null) {
+                    if ($final_value <= 3.00) {
+                        $status = 'Passed';
+                    } else {
+                        // Anything above 3.00 (including 3.01-5.00) is Failed
+                        $status = 'Failed';
+                    }
                 } else {
-                    // Anything above 3.00 (including 3.01-5.00) is Failed
-                    $status = 'Failed';
+                    // If no final grade, only allow Enrolled
+                    $status = 'Enrolled';
                 }
+
+                // Update enrollment
+                $update_sql = "UPDATE enrollments SET midterm_grade = ?, final_grade = ?, status = ? WHERE enrollment_id = ? AND student_id = ?";
+                $stmt = $conn->prepare($update_sql);
+                $stmt->bind_param('ddsii', $midterm_value, $final_value, $status, $enrollment_id, $student_id);
+                if ($stmt->execute() && $stmt->affected_rows >= 0) {
+                    $updated++;
+                }
+                $stmt->close();
+            }
+
+            if (empty($errors)) {
+                $conn->commit();
+                $message = "Grades updated successfully! ($updated enrollments processed)";
+                $message_type = 'success';
             } else {
-                // If no final grade, only allow Enrolled
-                $status = 'Enrolled';
+                $conn->rollback();
+                $message = implode('<br>', $errors);
+                $message_type = 'error';
             }
-            
-            // Update enrollment
-            $update_sql = "UPDATE enrollments SET midterm_grade = ?, final_grade = ?, status = ? WHERE enrollment_id = ? AND student_id = ?";
-            $stmt = $conn->prepare($update_sql);
-            $stmt->bind_param('ddsii', $midterm_value, $final_value, $status, $enrollment_id, $student_id);
-            if ($stmt->execute() && $stmt->affected_rows >= 0) {
-                $updated++;
-            }
-            $stmt->close();
-        }
-        
-        if (empty($errors)) {
-            $conn->commit();
-            $message = "Grades updated successfully! ($updated enrollments processed)";
-            $message_type = 'success';
-        } else {
+        } catch (Exception $e) {
             $conn->rollback();
-            $message = implode('<br>', $errors);
+            $message = 'Error updating grades: ' . $e->getMessage();
             $message_type = 'error';
         }
-    } catch (Exception $e) {
-        $conn->rollback();
-        $message = 'Error updating grades: ' . $e->getMessage();
-        $message_type = 'error';
     }
 }
 
@@ -130,6 +138,10 @@ $grades_result = db_query($conn, $grades_sql, $types, $params);
 $grades = $grades_result ? db_fetch_all($grades_result) : [];
 
 $conn->close();
+
+$student_list_url = getStudentListReturnUrl('..');
+$records_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id . '&tab=grades', $student_list_url);
+$personal_info_url = appendReturnParam('student_personal.php?id=' . $student_id, $student_list_url);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -137,107 +149,29 @@ $conn->close();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Edit Grades - <?php echo htmlspecialchars($student['first_name'] . ' ' . $student['last_name']); ?></title>
-    <link rel="stylesheet" href="../css/common.css">
-    <link rel="stylesheet" href="../css/enhancements.css">
-    <link rel="stylesheet" href="../css/details.css">
-    <script src="../js/app.js" defer></script>
-    <style>
-        .grade-input {
-            width: 70px;
-            padding: 6px 8px;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-            text-align: center;
-            font-size: 14px;
-        }
-        .grade-input:focus {
-            outline: none;
-            border-color: #0066cc;
-            box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.1);
-        }
-        .grade-input.invalid {
-            border-color: #dc3545;
-            background: #fff5f5;
-        }
-        .status-select {
-            padding: 6px 8px;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-            font-size: 13px;
-        }
-        .message {
-            padding: 15px 20px;
-            border-radius: 8px;
-            margin-bottom: 25px;
-            font-size: 14px;
-        }
-        .message.success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        .message.error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        .form-actions {
-            display: flex;
-            gap: 15px;
-            justify-content: flex-end;
-            margin-top: 25px;
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 8px;
-        }
-        .form-actions .btn {
-            padding: 12px 30px;
-            font-size: 15px;
-        }
-        .grades-table input[type="number"] {
-            -moz-appearance: textfield;
-        }
-        .grades-table input::-webkit-outer-spin-button,
-        .grades-table input::-webkit-inner-spin-button {
-            -webkit-appearance: none;
-            margin: 0;
-        }
-        .grade-help {
-            background: #e7f3ff;
-            padding: 15px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            font-size: 13px;
-            color: #004085;
-        }
-        .grade-help strong {
-            display: block;
-            margin-bottom: 5px;
-        }
-        .grade-scale {
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-            margin-top: 8px;
-        }
-        .grade-scale span {
-            background: #fff;
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-        }
-    </style>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css', '../')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/details.css', '../')); ?>">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <script src="<?php echo htmlspecialchars(app_asset('js/app.js', '../')); ?>" defer></script>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/forms_bundle.css', '../')); ?>">
 </head>
-<body>
+<body class="has-sidebar page-edit-grades">
+    <?php renderAppSidebar(['active' => 'students', 'basePath' => '..']); ?>
     <div class="container">
         <header>
             <h1>Edit Grades</h1>
             <div class="header-actions">
-                <a href="../index.php" class="btn btn-back">← Back to Student List</a>
-                <a href="student_schedule_grades.php?id=<?php echo $student_id; ?>&tab=grades" class="btn btn-grades">View Records</a>
-                <a href="student_personal.php?id=<?php echo $student_id; ?>" class="btn btn-info">Personal Info</a>
+                <a href="<?php echo htmlspecialchars($student_list_url); ?>" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Student List</a>
+                <a href="<?php echo htmlspecialchars($records_url); ?>" class="btn btn-grades"><i class="bi bi-journal-bookmark" aria-hidden="true"></i>View Records</a>
+                <a href="<?php echo htmlspecialchars($personal_info_url); ?>" class="btn btn-info"><i class="bi bi-person-vcard" aria-hidden="true"></i>Personal Info</a>
             </div>
         </header>
+
+        <?php renderPageBreadcrumbs([
+            ['label' => 'Students', 'href' => $student_list_url],
+            ['label' => 'Records', 'href' => $records_url],
+            ['label' => 'Edit Grades']
+        ]); ?>
 
         <div class="student-header">
             <div class="student-name"><?php echo htmlspecialchars($student['last_name'] . ', ' . $student['first_name'] . ' ' . ($student['middle_name'] ?? '')); ?></div>
@@ -288,6 +222,7 @@ $conn->close();
                 <p class="no-data">No enrollments found for this student<?php echo $selected_year > 0 ? ' for the selected filters' : ''; ?>.</p>
             <?php else: ?>
                 <form method="post">
+                    <?php echo csrf_token_field($csrf_scope); ?>
                     <?php
                     // Group grades by year and semester
                     $grouped_grades = [];
@@ -356,7 +291,7 @@ $conn->close();
                     <?php endforeach; ?>
 
                     <div class="form-actions">
-                        <a href="student_schedule_grades.php?id=<?php echo $student_id; ?>&tab=grades" class="btn btn-back">Cancel</a>
+                        <a href="<?php echo htmlspecialchars($records_url); ?>" class="btn btn-back">Cancel</a>
                         <button type="submit" class="btn btn-add">Save All Grades</button>
                     </div>
                 </form>

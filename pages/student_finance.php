@@ -1,6 +1,8 @@
 <?php
 require_once '../config/db_helpers.php';
 require_once '../config/finance_helpers.php';
+require_once '../config/sidebar.php';
+require_once '../config/csrf_helpers.php';
 
 $student_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 if ($student_id <= 0) {
@@ -10,21 +12,26 @@ if ($student_id <= 0) {
 
 $conn = getDBConnection();
 $message = '';
+$csrf_scope = 'student_finance_payment';
 
 // --- Handle Payment ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'payment') {
-    $amount = floatval($_POST['amount']);
-    $notes = trim($_POST['notes']);
-    $sy = $_POST['academic_year']; 
-    $sem = intval($_POST['semester']);
-    
-    if ($amount > 0) {
-        $ins_sql = "INSERT INTO payments (student_id, amount, academic_year, semester, notes, payment_date) VALUES (?, ?, ?, ?, ?, NOW())";
-        if (db_query($conn, $ins_sql, 'idsis', [$student_id, $amount, $sy, $sem, $notes])) {
-            $message = 'Payment recorded successfully!';
-        } else {
-            // Include db error for debugging (remove in production if strict security needed, but helpful now)
-            $message = 'Error recording payment: ' . $conn->error;
+    if (!csrf_validate_request_token($csrf_scope)) {
+        $message = 'Invalid or expired security token. Please refresh the page and try again.';
+    } else {
+        $amount = floatval($_POST['amount']);
+        $notes = trim($_POST['notes']);
+        $sy = $_POST['academic_year']; 
+        $sem = intval($_POST['semester']);
+
+        if ($amount > 0) {
+            $ins_sql = "INSERT INTO payments (student_id, amount, academic_year, semester, notes, payment_date) VALUES (?, ?, ?, ?, ?, NOW())";
+            if (db_query($conn, $ins_sql, 'idsis', [$student_id, $amount, $sy, $sem, $notes])) {
+                $message = 'Payment recorded successfully!';
+            } else {
+                // Include db error for debugging (remove in production if strict security needed, but helpful now)
+                $message = 'Error recording payment: ' . $conn->error;
+            }
         }
     }
 }
@@ -193,6 +200,10 @@ $payments = db_fetch_all(db_query($conn, $pay_sql, $pay_types, $pay_params));
 
 // Total paid is already calculated in grand_total_paid from carry-forward calculation
 
+$finance_page_url = getAppRoute('finance', '..');
+$finance_return_url = sanitizeInternalNavigationTarget((string)($_GET['return'] ?? ''), $finance_page_url);
+$encoded_return = rawurlencode($finance_return_url);
+
 $conn->close();
 // --- AJAX HANDLER ---
 $is_ajax = isset($_GET['ajax']) && $_GET['ajax'] === '1';
@@ -205,135 +216,23 @@ if (!$is_ajax) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Account Details - <?php echo htmlspecialchars($student['last_name']); ?></title>
-    <link rel="stylesheet" href="../css/common.css">
-    <link rel="stylesheet" href="../css/enhancements.css">
-    <style>
-        .finance-container { max-width: 1000px; margin: 30px auto; padding: 0; }
-        .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 30px; }
-        .card { background: var(--bg-card); padding: 24px; border-radius: var(--radius-lg); border: 1px solid var(--border-color); margin-bottom: 20px; box-shadow: var(--shadow-sm); }
-        .balance-card { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-color: #bfdbfe; text-align: center; }
-        .balance-amount { font-size: 2.5em; font-weight: 700; color: var(--primary); margin: 10px 0; font-family: var(--font-heading); }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th, td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); text-align: left; }
-        th { background: #f9fafb; color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .section-title { font-size: 1.1em; border-bottom: 2px solid var(--border-color); padding-bottom: 8px; margin-bottom: 15px; margin-top: 0; color: var(--text-main); font-weight: 600; }
-        
-        .payment-form label { display: block; margin-bottom: 6px; font-weight: 500; font-size: 13px; color: var(--text-muted); }
-        .payment-form input, .payment-form select, .payment-form textarea { 
-            width: 100%; 
-            padding: 10px 12px; 
-            border: 1px solid var(--border-color); 
-            border-radius: var(--radius-md); 
-            box-sizing: border-box; 
-            margin-bottom: 15px; 
-            font-size: 14px;
-            font-family: var(--font-ui);
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        .payment-form input:focus, .payment-form select:focus, .payment-form textarea:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
-        }
-        .payment-form input[readonly] { background: #f3f4f6; color: var(--text-muted); }
-        .btn-pay { 
-            width: 100%; 
-            padding: 12px; 
-            background: var(--status-success); 
-            color: white; 
-            border: none; 
-            font-size: 14px; 
-            font-weight: 500;
-            border-radius: var(--radius-md); 
-            cursor: pointer; 
-            transition: all 0.15s ease;
-        }
-        .btn-pay:hover { background: #059669; }
-
-        .term-filter { 
-            display: flex; 
-            gap: 15px; 
-            margin-bottom: 20px; 
-            padding: 20px; 
-            background: var(--bg-card); 
-            border-radius: var(--radius-lg); 
-            align-items: flex-end;
-            border: 1px solid var(--border-color);
-            box-shadow: var(--shadow-sm);
-        }
-        .term-filter .filter-group { display: flex; flex-direction: column; gap: 6px; flex: 1; }
-        .term-filter .filter-group label { font-size: 12px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-        .term-filter .filter-group select { 
-            margin-bottom: 0; 
-            min-width: 200px;
-            padding: 10px 14px;
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-md);
-            font-size: 14px;
-            background: white;
-        }
-        
-        .student-header { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-            gap: 15px;
-        }
-        .student-header h1 { 
-            font-size: 1.8em; 
-            margin: 0;
-            color: var(--text);
-        }
-        .student-badges { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-        .badge { padding: 6px 14px; border-radius: 20px; font-weight: 500; font-size: 13px; }
-        .badge-info { background: rgba(79, 70, 229, 0.1); color: var(--primary); }
-        .badge-term { background: var(--status-info-bg); color: var(--status-info); }
-        
-        .assessment-term-header { 
-            margin: 0 0 12px 0; 
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); 
-            padding: 10px 14px; 
-            border-radius: var(--radius-md);
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text-main);
-        }
-        .assessment-section-header {
-            background-color: #f8f9fa;
-            font-weight: 600;
-            color: var(--text-muted);
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .discount-row { background-color: #f0fff4 !important; }
-        .discount-section-header { background-color: #d4edda !important; color: #155724 !important; }
-        .total-row { font-weight: bold; background-color: #e9ecef !important; border-top: 2px solid var(--border-color); }
-        
-        .message-success { 
-            background: rgba(16, 185, 129, 0.1); 
-            color: #059669; 
-            padding: 14px 20px; 
-            border-radius: var(--radius-md); 
-            margin-bottom: 20px;
-            border: 1px solid rgba(16, 185, 129, 0.2);
-            font-weight: 500;
-        }
-        
-        @media (max-width: 900px) {
-            .grid { grid-template-columns: 1fr; }
-            .student-header { flex-direction: column; align-items: flex-start; }
-        }
-    </style>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css', '../')); ?>">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <script src="<?php echo htmlspecialchars(app_asset('js/app.js', '../')); ?>" defer></script>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/finance_bundle.css', '../')); ?>">
 </head>
-<body>
+<body class="has-sidebar page-student-finance">
+<?php renderAppSidebar(['active' => 'finance', 'basePath' => '..']); ?>
 
 <div class="container finance-container">
-    <header style="margin-bottom: 25px;">
-        <a href="../index.php" class="btn btn-secondary">&larr; Back to Student List</a>
+    <header class="finance-account-nav">
+        <a href="<?php echo htmlspecialchars($finance_return_url); ?>" class="btn btn-secondary finance-account-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Finance Page</a>
     </header>
+    <?php renderPageBreadcrumbs([
+        ['label' => 'Finance', 'href' => $finance_page_url],
+        ['label' => 'Account'],
+        ['label' => trim(($student['last_name'] ?? '') . ', ' . ($student['first_name'] ?? ''))]
+    ]); ?>
 <?php } ?>
 
     <!-- Wrapper for AJAX content -->
@@ -348,9 +247,8 @@ if (!$is_ajax) {
             <span class="badge badge-term">
                  <?php echo htmlspecialchars($selected_term['label']); ?>
             </span>
-            <span class="badge" style="background: rgba(67, 56, 202, 0.1); color: var(--primary);">
+            <span class="badge badge-rate">
                 ₱<?php echo number_format($tuition_rate, 2); ?>/unit
-            </span>
             </span>
         </div>
     </div>
@@ -364,7 +262,7 @@ if (!$is_ajax) {
         <input type="hidden" name="id" value="<?php echo $student_id; ?>">
         <div class="filter-group">
             <label>Select Term</label>
-            <select name="term" onchange="updateFinanceFilter(this.value)">
+            <select name="term" data-finance-action="filter-term">
                 <option value="||" <?php echo ($filter_ay === '' && $filter_sem === 0) ? 'selected' : ''; ?>>All Terms (Cumulative)</option>
                 <?php foreach($terms_options as $key => $opt): ?>
                     <option value="<?php echo $key; ?>" <?php echo $selected_key === $key ? 'selected' : ''; ?>>
@@ -384,9 +282,9 @@ if (!$is_ajax) {
                     <p class="empty-state">No enrollment records found for this term.</p>
                 <?php else: ?>
                     <?php foreach ($soa as $term): ?>
-                        <div style="margin-bottom: 20px;">
+                        <div class="assessment-term-card">
                             <h4 class="assessment-term-header"><?php echo $term['ay']; ?> - <?php echo $term['sem'] == 1 ? '1st Semester' : '2nd Semester'; ?></h4>
-                            <table style="font-size: 0.9em; width: 100%;">
+                            <table class="assessment-table">
                                 <!-- Tuition Section -->
                                 <tr class="assessment-section-header">
                                     <td colspan="2">Tuition Fees</td>
@@ -455,7 +353,7 @@ if (!$is_ajax) {
                                 <?php if(isset($term['credit_applied']) && $term['credit_applied'] > 0): ?>
                                 <tr style="background: rgba(59, 130, 246, 0.08);">
                                     <td style="padding: 8px 12px; color: var(--status-info);">
-                                        <strong>💰 Credit Applied</strong>
+                                        <strong class="inline-icon-text"><i class="bi bi-piggy-bank-fill" aria-hidden="true"></i>Credit Applied</strong>
                                         <span style="font-size: 0.85em; color: var(--text-muted);"> (from previous term overpayment)</span>
                                     </td>
                                     <td style="text-align:right; padding: 8px 12px; color: var(--status-info); font-weight: 600;">-₱<?php echo number_format($term['credit_applied'], 2); ?></td>
@@ -469,7 +367,7 @@ if (!$is_ajax) {
                                         <?php if($term['balance'] > 0): ?>
                                             ₱<?php echo number_format($term['balance'], 2); ?>
                                         <?php elseif($term['balance'] == 0): ?>
-                                            ✓ PAID
+                                            <span class="inline-icon-text"><i class="bi bi-check-circle-fill" aria-hidden="true"></i>PAID</span>
                                         <?php endif; ?>
                                     </td>
                                 </tr>
@@ -478,7 +376,7 @@ if (!$is_ajax) {
                                 <?php if(isset($term['running_credit']) && $term['running_credit'] > 0): ?>
                                 <tr style="background: rgba(99, 102, 241, 0.1);">
                                     <td style="padding: 8px 12px; color: var(--primary);">
-                                        <strong>→ Credit to Next Term</strong>
+                                        <strong class="inline-icon-text"><i class="bi bi-arrow-right-circle-fill" aria-hidden="true"></i>Credit to Next Term</strong>
                                     </td>
                                     <td style="text-align:right; padding: 8px 12px; color: var(--primary); font-weight: 600;">₱<?php echo number_format($term['running_credit'], 2); ?></td>
                                 </tr>
@@ -487,22 +385,22 @@ if (!$is_ajax) {
                         </div>
                     <?php endforeach; ?>
                 <?php endif; ?>
-                <div style="border-top: 2px solid var(--text-main); padding-top: 15px; margin-top: 10px;">
-                    <div style="display:flex; justify-content:space-between; font-weight:bold; font-size: 1.1em; font-family: var(--font-heading); margin-bottom: 8px;">
+                <div class="assessment-summary">
+                    <div class="assessment-summary-row assessment-summary-row-main">
                         <span>Total Assessment</span>
                         <span>₱ <?php echo number_format($grand_total_assessment, 2); ?></span>
                     </div>
-                    <div style="display:flex; justify-content:space-between; color: var(--status-success); margin-bottom: 4px;">
+                    <div class="assessment-summary-row assessment-summary-row-paid">
                         <span>Total Paid</span>
                         <span>-₱ <?php echo number_format($grand_total_paid, 2); ?></span>
                     </div>
                     <?php if($grand_total_credits_applied > 0): ?>
-                    <div style="display:flex; justify-content:space-between; color: var(--status-info); margin-bottom: 4px;">
+                    <div class="assessment-summary-row assessment-summary-row-credit">
                         <span>Credits Applied</span>
                         <span>-₱ <?php echo number_format($grand_total_credits_applied, 2); ?></span>
                     </div>
                     <?php endif; ?>
-                    <div style="display:flex; justify-content:space-between; font-weight:bold; font-size: 1.2em; padding-top: 8px; border-top: 1px solid var(--border-color); color: <?php echo $balance > 0 ? 'var(--status-error)' : 'var(--status-success)'; ?>;">
+                    <div class="assessment-summary-row assessment-summary-row-total <?php echo $balance > 0 ? 'is-due' : ($balance < 0 ? 'is-credit' : 'is-clear'); ?>">
                         <span><?php echo $balance > 0 ? 'Balance Due' : ($balance < 0 ? 'Overpaid' : 'Fully Paid'); ?></span>
                         <span>₱ <?php echo number_format(abs($balance), 2); ?></span>
                     </div>
@@ -514,7 +412,7 @@ if (!$is_ajax) {
                 <?php if (empty($payments)): ?>
                     <p>No payments recorded for this term.</p>
                 <?php else: ?>
-                    <table>
+                    <table class="payment-history-table">
                         <thead>
                             <tr>
                                 <th>Date</th>
@@ -547,12 +445,12 @@ if (!$is_ajax) {
         <!-- Right: Actions -->
         <div>
             <div class="card balance-card">
-                <h3 style="font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin: 0;"><?php echo ($filter_ay === '' && $filter_sem === 0) ? 'Cumulative Balance' : 'Balance (Selected Term)'; ?></h3>
+                <h3 class="balance-card-title"><?php echo ($filter_ay === '' && $filter_sem === 0) ? 'Cumulative Balance' : 'Balance (Selected Term)'; ?></h3>
                 <?php if ($grand_total_assessment > 0 || $total_paid > 0): ?>
-                    <div class="balance-amount <?php echo $balance > 0 ? 'balance-positive' : ($balance < 0 ? 'balance-negative' : 'balance-zero'); ?>" style="color: <?php echo $balance > 0 ? 'var(--status-error)' : ($balance < 0 ? 'var(--status-info)' : 'var(--status-success)'); ?>;">
+                    <div class="balance-amount <?php echo $balance > 0 ? 'balance-positive' : ($balance < 0 ? 'balance-negative' : 'balance-zero'); ?>">
                         ₱ <?php echo number_format(abs($balance), 2); ?>
                     </div>
-                    <div style="color: var(--text-muted); font-size: 0.85em; font-weight: 500;">
+                    <div class="balance-card-status">
                         <?php if ($balance > 0): ?>
                             <span class="text-error">Amount Due</span>
                         <?php elseif ($balance < 0): ?>
@@ -562,9 +460,9 @@ if (!$is_ajax) {
                         <?php endif; ?>
                     </div>
                 <?php else: ?>
-                    <div class="balance-amount" style="font-size: 1.6em; color: var(--text-muted);">No Assessment</div>
+                    <div class="balance-amount balance-empty">No Assessment</div>
                 <?php endif; ?>
-                <div style="color: var(--text-muted); font-size: 0.85em; margin-top: 10px;">
+                <div class="balance-card-period">
                     <?php if ($filter_ay === '' && $filter_sem === 0): ?>
                         All Enrolled Terms
                     <?php else: ?>
@@ -573,19 +471,19 @@ if (!$is_ajax) {
                 </div>
                 
                 <?php if ($applied_credits > 0): ?>
-                <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-light);">
-                    <div style="font-size: 0.85em; color: var(--text-muted);">
+                <div class="balance-applied-credit">
+                    <div class="balance-applied-credit-text">
                         Applied Credits: <strong style="color: var(--status-success);">₱ <?php echo number_format($applied_credits, 2); ?></strong>
                     </div>
                 </div>
                 <?php endif; ?>
                 
                 <?php if ($available_credits > 0): ?>
-                <div style="margin-top: 8px; padding: 8px; background: rgba(67, 56, 202, 0.1); border-radius: 6px;">
-                    <div style="font-size: 0.85em; color: var(--primary);">
-                        💰 Available Credit: <strong>₱ <?php echo number_format($available_credits, 2); ?></strong>
+                <div class="balance-available-credit">
+                    <div class="balance-available-credit-text">
+                        <span class="inline-icon-text"><i class="bi bi-wallet-fill" aria-hidden="true"></i>Available Credit:</span> <strong>₱ <?php echo number_format($available_credits, 2); ?></strong>
                     </div>
-                    <div style="font-size: 0.75em; color: var(--text-muted); margin-top: 4px;">
+                    <div class="balance-available-credit-note">
                         From previous term overpayments
                     </div>
                 </div>
@@ -593,8 +491,9 @@ if (!$is_ajax) {
             </div>
 
             <div class="card">
-                <h3 class="section-title">💳 Add Payment</h3>
+                <h3 class="section-title"><i class="bi bi-credit-card-2-front" aria-hidden="true"></i> Add Payment</h3>
                 <form method="post" action="?id=<?php echo $student_id; ?>&term=<?php echo urlencode($selected_key); ?>" class="payment-form">
+                    <?php echo csrf_token_field($csrf_scope); ?>
                     <input type="hidden" name="action" value="payment">
                     
                     <label>Academic Year</label>
@@ -620,7 +519,8 @@ if (!$is_ajax) {
     <script>
         function updateFinanceFilter(val) {
              const studentId = '<?php echo $student_id; ?>';
-             const url = `?id=${studentId}&term=${encodeURIComponent(val)}`;
+               const returnParam = '<?php echo $encoded_return; ?>';
+               const url = `?id=${studentId}&term=${encodeURIComponent(val)}&return=${returnParam}`;
              
              // Opacity indicator
              const container = document.getElementById('finance-content');
@@ -646,10 +546,25 @@ if (!$is_ajax) {
                 })
                 .catch(err => {
                     console.error('Error:', err);
+                    if (window.StudentApp && window.StudentApp.Toast) {
+                        window.StudentApp.Toast.show('Filter failed. Reloading page.', 'error', 2200);
+                        setTimeout(() => window.location.reload(), 700);
+                        return;
+                    }
+
                     alert('Filter failed. Reloading page.');
                     window.location.reload();
                 });
         }
+
+        document.addEventListener('change', function(event) {
+            const filterSelect = event.target.closest('select[data-finance-action="filter-term"]');
+            if (!filterSelect) {
+                return;
+            }
+
+            updateFinanceFilter(filterSelect.value);
+        });
     </script>
 
 

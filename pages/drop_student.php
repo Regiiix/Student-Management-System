@@ -88,70 +88,15 @@ $conn->close();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Drop Student - Confirmation</title>
-    <link rel="stylesheet" href="../css/common.css">
-    <link rel="stylesheet" href="../css/enhancements.css">
-    <link rel="stylesheet" href="../css/details.css">
-    <script src="../js/app.js" defer></script>
-    <style>
-        .confirm-container {
-            max-width: 500px;
-            margin: 50px auto;
-            background: #fff;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-            text-align: center;
-        }
-        .confirm-icon {
-            font-size: 64px;
-            margin-bottom: 20px;
-        }
-        .confirm-title {
-            font-size: 24px;
-            font-weight: 600;
-            color: #343a40;
-            margin-bottom: 15px;
-        }
-        .confirm-message {
-            font-size: 16px;
-            color: #6c757d;
-            margin-bottom: 10px;
-            line-height: 1.6;
-        }
-        .student-info-box {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
-            padding: 20px;
-            margin: 25px 0;
-            text-align: left;
-        }
-        .student-info-box p {
-            margin: 8px 0;
-            font-size: 14px;
-        }
-        .student-info-box strong {
-            color: #495057;
-        }
-        .warning-text {
-            color: #dc3545;
-            font-weight: 500;
-            margin-top: 15px;
-            font-size: 14px;
-        }
-        .confirm-buttons {
-            display: flex;
-            gap: 15px;
-            justify-content: center;
-            margin-top: 30px;
-        }
-        .confirm-buttons .btn {
-            padding: 12px 30px;
-            font-size: 15px;
-        }
-    </style>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css', '../')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/details.css', '../')); ?>">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <script src="<?php echo htmlspecialchars(app_asset('js/app.js', '../')); ?>" defer></script>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/forms_bundle.css', '../')); ?>">
 </head>
-<body>
+<body class="has-sidebar page-drop-student">
+    <?php require_once '../config/sidebar.php'; ?>
+    <?php renderAppSidebar(['active' => 'students', 'basePath' => '..']); ?>
     <div class="container">
         <div class="confirm-container">
             <div class="confirm-title">Drop Student?</div>

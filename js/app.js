@@ -42,6 +42,81 @@ function throttle(func, limit = 100) {
     };
 }
 
+/**
+ * Resolve an error-notice target to a DOM element.
+ * @param {HTMLElement|string} target
+ * @returns {HTMLElement|null}
+ */
+function resolveApiErrorTarget(target) {
+    if (!target) return null;
+    if (target instanceof HTMLElement) return target;
+    if (typeof target === 'string') {
+        if (target.startsWith('#')) {
+            return document.querySelector(target);
+        }
+        return document.getElementById(target);
+    }
+    return null;
+}
+
+/**
+ * Clear an API error notice element.
+ * @param {HTMLElement|string} target
+ */
+function clearApiErrorNotice(target) {
+    const notice = resolveApiErrorTarget(target);
+    if (!notice) return;
+
+    notice.textContent = '';
+    notice.style.display = 'none';
+    notice.style.alignItems = '';
+    notice.style.justifyContent = '';
+    notice.style.gap = '';
+    notice.classList.add('hidden');
+}
+
+/**
+ * Show an API error notice with optional retry action.
+ * @param {HTMLElement|string} target
+ * @param {string} message
+ * @param {Function|null} onRetry
+ * @param {Object} options
+ */
+function showApiErrorNotice(target, message, onRetry = null, options = {}) {
+    const notice = resolveApiErrorTarget(target);
+    if (!notice) return;
+
+    const fallbackMessage = options.fallbackMessage || 'Unable to load data right now. Please try again.';
+    const retryLabel = options.retryLabel || 'Retry';
+    const buttonClass = options.buttonClass || 'btn btn-primary';
+
+    notice.textContent = '';
+
+    const text = document.createElement('span');
+    text.textContent = message || fallbackMessage;
+    notice.appendChild(text);
+
+    if (typeof onRetry === 'function') {
+        const retryBtn = document.createElement('button');
+        retryBtn.type = 'button';
+        retryBtn.className = buttonClass;
+        retryBtn.textContent = retryLabel;
+        retryBtn.style.minHeight = '34px';
+        retryBtn.style.padding = '6px 12px';
+        retryBtn.addEventListener('click', onRetry);
+        notice.appendChild(retryBtn);
+
+        notice.style.display = 'flex';
+        notice.style.alignItems = 'center';
+        notice.style.justifyContent = 'space-between';
+        notice.style.gap = '12px';
+    } else {
+        notice.style.display = 'block';
+    }
+
+    notice.classList.remove('hidden');
+}
+
 // ===================================
 // Form Validation
 // ===================================
@@ -445,10 +520,551 @@ const Toast = {
 };
 
 // ===================================
+// Sidebar Navigation
+// ===================================
+
+function initSidebarNavigation() {
+    const sidebar = document.getElementById('appSidebar');
+    if (!sidebar) return;
+
+    const body = document.body;
+    const toggles = Array.from(document.querySelectorAll('[data-sidebar-toggle]'));
+    const closeBtn = sidebar.querySelector('[data-sidebar-close]');
+    const backdrop = document.querySelector('[data-sidebar-backdrop]');
+    const mobileQuery = window.matchMedia('(max-width: 1100px)');
+
+    const syncExpandedState = () => {
+        const isOpen = body.classList.contains('sidebar-open');
+        toggles.forEach((btn) => {
+            btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        });
+    };
+
+    const closeSidebar = () => {
+        body.classList.remove('sidebar-open');
+        syncExpandedState();
+    };
+
+    toggles.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            if (!mobileQuery.matches) return;
+
+            body.classList.toggle('sidebar-open');
+            syncExpandedState();
+        });
+    });
+
+    if (closeBtn) {
+        closeBtn.addEventListener('click', closeSidebar);
+    }
+
+    if (backdrop) {
+        backdrop.addEventListener('click', closeSidebar);
+    }
+
+    sidebar.querySelectorAll('a').forEach((link) => {
+        link.addEventListener('click', () => {
+            if (mobileQuery.matches) {
+                closeSidebar();
+            }
+        });
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeSidebar();
+        }
+    });
+
+    if (typeof mobileQuery.addEventListener === 'function') {
+        mobileQuery.addEventListener('change', (event) => {
+            if (!event.matches) {
+                closeSidebar();
+            }
+        });
+    }
+
+    syncExpandedState();
+}
+
+// ===================================
+// Accessibility Enhancements
+// ===================================
+
+/**
+ * Create a skip link and attach it to the first major content container.
+ */
+function initSkipLink() {
+    if (document.querySelector('.skip-link')) {
+        return;
+    }
+
+    const mainTarget = document.querySelector('main') || document.querySelector('.container');
+    if (!mainTarget) {
+        return;
+    }
+
+    if (!mainTarget.id) {
+        mainTarget.id = 'main-content';
+    }
+
+    if (mainTarget.tagName.toLowerCase() !== 'main' && !mainTarget.hasAttribute('role')) {
+        mainTarget.setAttribute('role', 'main');
+    }
+
+    const skipLink = document.createElement('a');
+    skipLink.className = 'skip-link';
+    skipLink.href = `#${mainTarget.id}`;
+    skipLink.textContent = 'Skip to main content';
+    document.body.insertBefore(skipLink, document.body.firstChild);
+}
+
+/**
+ * @param {Element} element
+ * @returns {boolean}
+ */
+function isNativeInteractiveElement(element) {
+    const tagName = element.tagName;
+    if (['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY', 'OPTION'].includes(tagName)) {
+        return true;
+    }
+
+    return element.hasAttribute('contenteditable');
+}
+
+/**
+ * @param {HTMLElement} element
+ */
+function bindKeyboardClick(element) {
+    if (element.dataset.keyboardClickBound === 'true') {
+        return;
+    }
+
+    element.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            element.click();
+        }
+    });
+
+    element.dataset.keyboardClickBound = 'true';
+}
+
+/**
+ * Add keyboard access to click-only UI controls.
+ */
+function initKeyboardAccessibleActions() {
+    const clickTargets = Array.from(document.querySelectorAll('[onclick]'));
+
+    clickTargets.forEach((target) => {
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+
+        if (isNativeInteractiveElement(target)) {
+            return;
+        }
+
+        if (!target.hasAttribute('tabindex')) {
+            target.setAttribute('tabindex', '0');
+        }
+
+        if (!target.hasAttribute('role')) {
+            target.setAttribute('role', 'button');
+        }
+
+        bindKeyboardClick(target);
+    });
+
+    const statusCards = Array.from(document.querySelectorAll('.status-card[onclick]'));
+    if (statusCards.length > 0) {
+        const syncPressedState = () => {
+            statusCards.forEach((card) => {
+                card.setAttribute('aria-pressed', card.classList.contains('active') ? 'true' : 'false');
+            });
+        };
+
+        statusCards.forEach((card) => {
+            card.addEventListener('click', () => {
+                setTimeout(syncPressedState, 0);
+            });
+        });
+
+        syncPressedState();
+    }
+}
+
+let tabListCounter = 0;
+
+/**
+ * @param {HTMLElement} tab
+ * @returns {string}
+ */
+function resolveTabPanelId(tab) {
+    const dataTabValue = tab.getAttribute('data-tab');
+    if (dataTabValue) {
+        const panelIdFromData = `tab-${dataTabValue}`;
+        if (document.getElementById(panelIdFromData)) {
+            return panelIdFromData;
+        }
+    }
+
+    const onclickValue = tab.getAttribute('onclick') || '';
+    const match = onclickValue.match(/showTab\(['"]([^'"]+)['"]\)/);
+    if (match && match[1]) {
+        const panelId = `tab-${match[1]}`;
+        if (document.getElementById(panelId)) {
+            return panelId;
+        }
+    }
+
+    if (tab instanceof HTMLAnchorElement) {
+        const href = tab.getAttribute('href') || '';
+        const tabQuery = href.match(/[?&]tab=([^&]+)/);
+        if (tabQuery && tabQuery[1]) {
+            const panelId = `tab-${decodeURIComponent(tabQuery[1])}`;
+            if (document.getElementById(panelId)) {
+                return panelId;
+            }
+        }
+    }
+
+    return '';
+}
+
+/**
+ * @param {HTMLElement} tabList
+ * @param {HTMLElement[]} tabs
+ */
+function enhanceTabList(tabList, tabs) {
+    if (tabs.length < 2) {
+        return;
+    }
+
+    tabListCounter += 1;
+    tabList.setAttribute('role', 'tablist');
+
+    const syncTabState = () => {
+        let activeIndex = tabs.findIndex((tab) => tab.classList.contains('active'));
+        if (activeIndex < 0) {
+            activeIndex = 0;
+        }
+
+        tabs.forEach((tab, index) => {
+            const isSelected = index === activeIndex;
+            tab.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+            tab.setAttribute('tabindex', isSelected ? '0' : '-1');
+        });
+    };
+
+    tabs.forEach((tab, index) => {
+        if (!tab.id) {
+            tab.id = `tab-control-${tabListCounter}-${index}`;
+        }
+
+        tab.setAttribute('role', 'tab');
+
+        const panelId = resolveTabPanelId(tab);
+        if (panelId) {
+            tab.setAttribute('aria-controls', panelId);
+            const panel = document.getElementById(panelId);
+            if (panel) {
+                panel.setAttribute('role', 'tabpanel');
+                panel.setAttribute('aria-labelledby', tab.id);
+            }
+        }
+
+        tab.addEventListener('click', () => {
+            setTimeout(syncTabState, 0);
+        });
+
+        tab.addEventListener('keydown', (event) => {
+            const maxIndex = tabs.length - 1;
+            let nextIndex = index;
+
+            if (event.key === 'ArrowRight') {
+                nextIndex = index === maxIndex ? 0 : index + 1;
+            } else if (event.key === 'ArrowLeft') {
+                nextIndex = index === 0 ? maxIndex : index - 1;
+            } else if (event.key === 'Home') {
+                nextIndex = 0;
+            } else if (event.key === 'End') {
+                nextIndex = maxIndex;
+            } else {
+                return;
+            }
+
+            event.preventDefault();
+            const nextTab = tabs[nextIndex];
+            if (!nextTab) {
+                return;
+            }
+
+            nextTab.focus();
+            nextTab.click();
+        });
+    });
+
+    syncTabState();
+}
+
+/**
+ * Attach semantic tab roles and keyboard nav to existing tab UIs.
+ */
+function initSemanticTabs() {
+    document.querySelectorAll('.dashboard-tabs').forEach((tabList) => {
+        const tabs = Array.from(tabList.querySelectorAll('.dashboard-tab'));
+        enhanceTabList(tabList, tabs);
+    });
+
+    document.querySelectorAll('.tabs').forEach((tabList) => {
+        const tabs = Array.from(tabList.querySelectorAll(':scope > .tab, :scope > .tab-link'));
+        enhanceTabList(tabList, tabs);
+    });
+}
+
+/**
+ * Apply missing ARIA dialog semantics to existing modal markup.
+ */
+function initDialogSemantics() {
+    const overlays = Array.from(document.querySelectorAll('.modal-overlay'));
+    overlays.forEach((overlay) => {
+        if (!(overlay instanceof HTMLElement)) {
+            return;
+        }
+
+        const dialog = overlay.querySelector('.modal, .modal-container');
+        if (!(dialog instanceof HTMLElement)) {
+            return;
+        }
+
+        overlay.setAttribute('role', 'presentation');
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
+
+        if (!dialog.hasAttribute('tabindex')) {
+            dialog.setAttribute('tabindex', '-1');
+        }
+    });
+}
+
+let confirmDialogState = null;
+
+/**
+ * @returns {{overlay: HTMLElement, dialog: HTMLElement, title: HTMLElement, message: HTMLElement, cancelBtn: HTMLButtonElement, confirmBtn: HTMLButtonElement, resolver: ((value: boolean) => void)|null, restoreFocusEl: Element|null}}
+ */
+function ensureConfirmDialog() {
+    if (confirmDialogState) {
+        return confirmDialogState;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'appConfirmOverlay';
+    overlay.className = 'modal-overlay app-confirm-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.innerHTML = `
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="appConfirmTitle" aria-describedby="appConfirmMessage" tabindex="-1">
+            <div class="modal-header">
+                <h3 id="appConfirmTitle" class="modal-title">Confirm Action</h3>
+            </div>
+            <div class="modal-body">
+                <p id="appConfirmMessage"></p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-confirm-cancel>Cancel</button>
+                <button type="button" class="btn btn-danger" data-confirm-accept>Confirm</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const dialog = overlay.querySelector('.modal');
+    const title = overlay.querySelector('#appConfirmTitle');
+    const message = overlay.querySelector('#appConfirmMessage');
+    const cancelBtn = overlay.querySelector('[data-confirm-cancel]');
+    const confirmBtn = overlay.querySelector('[data-confirm-accept]');
+
+    if (!(dialog instanceof HTMLElement) || !(title instanceof HTMLElement) || !(message instanceof HTMLElement) || !(cancelBtn instanceof HTMLButtonElement) || !(confirmBtn instanceof HTMLButtonElement)) {
+        throw new Error('Unable to initialize shared confirm dialog.');
+    }
+
+    confirmDialogState = {
+        overlay,
+        dialog,
+        title,
+        message,
+        cancelBtn,
+        confirmBtn,
+        resolver: null,
+        restoreFocusEl: null,
+    };
+
+    const getFocusableElements = () => {
+        return Array.from(dialog.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+            .filter((el) => el instanceof HTMLElement && !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true');
+    };
+
+    const closeDialog = (confirmed) => {
+        if (!confirmDialogState) {
+            return;
+        }
+
+        confirmDialogState.overlay.classList.remove('active');
+        confirmDialogState.overlay.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('confirm-modal-open');
+
+        if (confirmDialogState.restoreFocusEl instanceof HTMLElement) {
+            confirmDialogState.restoreFocusEl.focus();
+        }
+
+        const resolver = confirmDialogState.resolver;
+        confirmDialogState.resolver = null;
+        confirmDialogState.restoreFocusEl = null;
+
+        if (typeof resolver === 'function') {
+            resolver(confirmed);
+        }
+    };
+
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) {
+            closeDialog(false);
+        }
+    });
+
+    cancelBtn.addEventListener('click', () => closeDialog(false));
+    confirmBtn.addEventListener('click', () => closeDialog(true));
+
+    dialog.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeDialog(false);
+            return;
+        }
+
+        if (event.key !== 'Tab') {
+            return;
+        }
+
+        const focusables = getFocusableElements();
+        if (focusables.length === 0) {
+            return;
+        }
+
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        const active = document.activeElement;
+
+        if (event.shiftKey && active === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && active === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    });
+
+    return confirmDialogState;
+}
+
+/**
+ * Show a shared confirmation dialog.
+ * @param {string} message
+ * @param {Object} options
+ * @returns {Promise<boolean>}
+ */
+function showConfirmDialog(message, options = {}) {
+    const state = ensureConfirmDialog();
+
+    if (state.resolver) {
+        state.resolver(false);
+        state.resolver = null;
+    }
+
+    state.restoreFocusEl = document.activeElement;
+
+    state.title.textContent = options.title || 'Confirm Action';
+    state.message.textContent = message || 'Are you sure you want to continue?';
+    state.cancelBtn.textContent = options.cancelText || 'Cancel';
+    state.confirmBtn.textContent = options.confirmText || 'Confirm';
+
+    const confirmClass = options.confirmClass || 'btn btn-danger';
+    state.confirmBtn.className = confirmClass;
+
+    state.overlay.classList.add('active');
+    state.overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('confirm-modal-open');
+
+    setTimeout(() => state.confirmBtn.focus(), 0);
+
+    return new Promise((resolve) => {
+        state.resolver = resolve;
+    });
+}
+
+/**
+ * Enable declarative confirmation using data-confirm attributes on forms.
+ */
+function initDeclarativeConfirmForms() {
+    document.addEventListener('submit', (event) => {
+        const form = event.target;
+        if (!(form instanceof HTMLFormElement)) {
+            return;
+        }
+
+        const message = form.getAttribute('data-confirm');
+        if (!message) {
+            return;
+        }
+
+        if (form.dataset.confirmBypass === 'true') {
+            delete form.dataset.confirmBypass;
+            return;
+        }
+
+        event.preventDefault();
+
+        const confirmText = form.getAttribute('data-confirm-text') || 'Confirm';
+        const cancelText = form.getAttribute('data-cancel-text') || 'Cancel';
+        const confirmStyle = form.getAttribute('data-confirm-style') || 'danger';
+        const confirmClass = confirmStyle === 'primary' ? 'btn btn-primary' : 'btn btn-danger';
+        const title = form.getAttribute('data-confirm-title') || 'Please Confirm';
+
+        showConfirmDialog(message, {
+            title,
+            confirmText,
+            cancelText,
+            confirmClass,
+        }).then((confirmed) => {
+            if (!confirmed) {
+                return;
+            }
+
+            form.dataset.confirmBypass = 'true';
+
+            if (typeof form.requestSubmit === 'function') {
+                form.requestSubmit();
+                return;
+            }
+
+            form.submit();
+        });
+    }, true);
+}
+
+// ===================================
 // Initialize on DOM Ready
 // ===================================
 
 document.addEventListener('DOMContentLoaded', function() {
+    initSkipLink();
+    initSemanticTabs();
+    initKeyboardAccessibleActions();
+    initDialogSemantics();
+    initDeclarativeConfirmForms();
+    initSidebarNavigation();
+
     // Initialize debounced search
     initDebouncedSearch('.search-input', 500);
     
@@ -490,5 +1106,8 @@ window.StudentApp = {
     Toast,
     Performance,
     debounce,
-    throttle
+    throttle,
+    showConfirmDialog,
+    showApiErrorNotice,
+    clearApiErrorNotice
 };
