@@ -13,11 +13,7 @@ $message_type = '';
 $csrf_scope = 'scholarships_management';
 
 // Get current academic year from settings
-$settings = [];
-$set_res = db_query($conn, "SELECT setting_key, setting_value FROM system_settings");
-while ($row = $set_res->fetch_assoc()) {
-    $settings[$row['setting_key']] = $row['setting_value'];
-}
+$settings = getSystemSettings($conn);
 $current_ay = $settings['current_academic_year'] ?? (date('Y') . '-' . (date('Y') + 1));
 
 // Handle form submissions

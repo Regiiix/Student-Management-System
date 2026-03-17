@@ -13,6 +13,7 @@ $conn = getDBConnection();
 $message = '';
 $message_type = '';
 $csrf_scope = 'edit_student_' . $student_id;
+$system_current_ay = (string)getSystemSetting($conn, 'current_academic_year', (date('Y') . '-' . (date('Y') + 1)));
 
 // Get student data
 $sql = "SELECT s.*, p.program_name, p.program_code 
@@ -97,8 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if (!$student_ay) {
                 // Fallback to System AY if no enrollment found
-                $set_res = db_query($conn, "SELECT setting_value FROM system_settings WHERE setting_key = 'current_academic_year'");
-                $student_ay = db_fetch_one($set_res)['setting_value'] ?? (date('Y') . '-' . (date('Y') + 1));
+                $student_ay = $system_current_ay;
             }
             
             $source_term = ['ay' => $student_ay, 'sem' => $current_sem, 'yl' => $current_yl];
@@ -159,8 +159,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // Handle Balance Forwarding if applicable
                     if ($forward_balance_amount > 0 && !empty($source_term)) {
                         // Get New Academic Year (re-fetch if needed, or assume sys_ay)
-                        $set_res = db_query($conn, "SELECT setting_value FROM system_settings WHERE setting_key = 'current_academic_year'");
-                        $sys_ay = db_fetch_one($set_res)['setting_value'] ?? (date('Y') . '-' . (date('Y') + 1));
+                        $sys_ay = $system_current_ay;
                         $target_ay = $sys_ay;
 
                         $target_yl = intval($_POST['year_level']);

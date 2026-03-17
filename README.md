@@ -105,10 +105,11 @@ student_system21/
 │       └── check_enrollments.php
 │
 └── database/                 # SQL files
-    ├── database_schema.sql   # Table definitions with indexes
-    ├── sample_data.sql       # Sample data for testing
-    ├── migration_schedule_conflicts.sql  # Conflict prevention migration (NEW)
-    └── run_migration.php     # Migration runner script (NEW)
+   ├── schema.sql            # Table definitions with indexes
+   ├── data.sql              # Sample data for testing
+   ├── migration_program_tuition.sql
+   ├── migration_performance_indexes.sql
+   └── complete_database.sql # Optional full DB export for transfer
 ```
 
 ---
@@ -497,15 +498,21 @@ Types: `toast-success`, `toast-error`, `toast-warning`, `toast-info`
 
 3. **Import Schema**
    ```
-   Import: database/database_schema.sql
+   Import: database/schema.sql
    ```
 
 4. **Import Sample Data**
    ```
-   Import: database/sample_data.sql
+   Import: database/data.sql
    ```
 
-5. **Configure Database Connection**
+5. **Run Migrations**
+   ```
+   Import: database/migration_program_tuition.sql
+   Import: database/migration_performance_indexes.sql
+   ```
+
+6. **Configure Database Connection**
    Edit `config/database.php`:
    ```php
    define('DB_HOST', 'localhost');
@@ -514,7 +521,7 @@ Types: `toast-success`, `toast-error`, `toast-warning`, `toast-info`
    define('DB_NAME', 'school_db21');
    ```
 
-6. **Access Application**
+7. **Access Application**
    ```
    http://localhost/student_system21/index.php
    ```
@@ -587,7 +594,13 @@ Types: `toast-success`, `toast-error`, `toast-warning`, `toast-info`
    - Choose the exported `.sql` file
    - Click "Go"
 
-5. **Verify Configuration**
+5. **Run Post-Import Migrations (Safe/Idempotent)**
+   ```
+   Import: database/migration_program_tuition.sql
+   Import: database/migration_performance_indexes.sql
+   ```
+
+6. **Verify Configuration**
    
    Check `config/database.php` matches your setup:
    ```php
@@ -597,7 +610,7 @@ Types: `toast-success`, `toast-error`, `toast-warning`, `toast-info`
    define('DB_NAME', 'school_db21');
    ```
 
-6. **Test the Application**
+7. **Test the Application**
    ```
    http://localhost/student_system21/index.php
    ```
@@ -611,6 +624,7 @@ If you don't need to preserve existing data:
 3. Import schema: `database/schema.sql`
 4. Import sample data: `database/data.sql`
 5. Run migrations: `database/migration_program_tuition.sql`
+6. Run performance migration: `database/migration_performance_indexes.sql`
 
 ### Method 3: Using Git (For Development)
 
@@ -637,6 +651,8 @@ git clone <your-repo-url> student_system21
 | "Access denied" error | Check DB_USER and DB_PASS in `config/database.php` |
 | Blank page | Check Apache error logs: `C:\xampp\apache\logs\error.log` |
 | Missing tables | Import the schema.sql file first, then data.sql |
+| Missing recent performance improvements | Run `database/migration_performance_indexes.sql` |
+| Stale cached API data | Delete JSON files under `logs/cache/` and refresh |
 | Port conflict | Change Apache port in XAMPP settings if 80 is in use |
 
 ### Files to Include in Transfer
@@ -650,12 +666,14 @@ student_system21/
 ├── api/             ← API endpoints
 ├── css/             ← Stylesheets
 ├── js/              ← JavaScript files
+├── images/           ← Backgrounds and UI images
 ├── database/        ← SQL files (schema, data, migrations)
 │   ├── schema.sql
 │   ├── data.sql
 │   ├── migration_program_tuition.sql
+│   ├── migration_performance_indexes.sql
 │   └── complete_database.sql  ← Full export (if available)
-└── logs/            ← Can be empty (auto-generated)
+└── logs/            ← Can be empty (auto-generated; logs/cache JSON not required)
 ```
 
 ---

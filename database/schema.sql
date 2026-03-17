@@ -82,7 +82,8 @@ CREATE TABLE students (
     FOREIGN KEY (program_id) REFERENCES programs(program_id) ON DELETE SET NULL,
     INDEX idx_program (program_id),
     INDEX idx_status (status),
-    INDEX idx_name_search (last_name, first_name)
+    INDEX idx_name_search (last_name, first_name),
+    INDEX idx_status_program_name (status, program_id, last_name, first_name)
 );
 
 -- -----------------------------------------------------------------------------
@@ -124,6 +125,7 @@ CREATE TABLE schedules (
     FOREIGN KEY (teacher_id) REFERENCES teachers(teacher_id) ON DELETE SET NULL,
     INDEX idx_curriculum (curriculum_id),
     INDEX idx_schedule_day (curriculum_id, day_of_week),
+    INDEX idx_curr_day_time (curriculum_id, day_of_week, start_time, end_time),
     INDEX idx_teacher (teacher_id)
 );
 
@@ -146,6 +148,8 @@ CREATE TABLE enrollments (
     FOREIGN KEY (curriculum_id) REFERENCES curriculum(curriculum_id) ON DELETE CASCADE,
     INDEX idx_student_year (student_id, academic_year),
     INDEX idx_enrollment_status (status),
+    INDEX idx_ay_status_student (academic_year, status, student_id),
+    INDEX idx_curr_ay_status (curriculum_id, academic_year, status),
     UNIQUE KEY unique_enrollment (student_id, curriculum_id, academic_year)
 );
 
@@ -168,7 +172,8 @@ CREATE TABLE semester_status (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
     UNIQUE KEY unique_semester (student_id, year_level, semester, academic_year),
-    INDEX idx_student_status (student_id, status)
+    INDEX idx_student_status (student_id, status),
+    INDEX idx_student_ay_sem_status (student_id, academic_year, semester, status)
 );
 
 -- -----------------------------------------------------------------------------
@@ -242,7 +247,8 @@ CREATE TABLE payments (
     reference_no VARCHAR(50),
     notes TEXT,
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
-    INDEX idx_student_ay (student_id, academic_year, semester)
+    INDEX idx_student_ay (student_id, academic_year, semester),
+    INDEX idx_ay_sem (academic_year, semester)
 );
 
 -- -----------------------------------------------------------------------------
@@ -312,7 +318,9 @@ CREATE TABLE student_scholarships (
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
     FOREIGN KEY (scholarship_id) REFERENCES scholarships(scholarship_id) ON DELETE CASCADE,
     UNIQUE KEY unique_student_scholarship_term (student_id, scholarship_id, academic_year, semester),
-    INDEX idx_student_term (student_id, academic_year, semester)
+    INDEX idx_student_term (student_id, academic_year, semester),
+    INDEX idx_ay_sem_status (academic_year, semester, status),
+    INDEX idx_scholarship_ay_sem (scholarship_id, academic_year, semester)
 );
 
 -- -----------------------------------------------------------------------------
@@ -372,7 +380,8 @@ CREATE TABLE academic_standings (
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
     UNIQUE KEY unique_standing (student_id, academic_year, semester),
     INDEX idx_standing (standing),
-    INDEX idx_student_standing (student_id, academic_year)
+    INDEX idx_student_standing (student_id, academic_year),
+    INDEX idx_ay_sem_standing (academic_year, semester, standing)
 );
 
 -- -----------------------------------------------------------------------------

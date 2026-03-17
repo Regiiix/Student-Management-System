@@ -3,11 +3,6 @@
 // Common database helper functions for prepared queries and fetches
 require_once __DIR__ . '/database.php';
 
-// Start session if not already started (for caching)
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
-
 /**
  * Prepare and execute a query, return result or false.
  * @param mysqli $conn
@@ -69,42 +64,204 @@ function db_fetch_one($result) {
 }
 
 /**
- * Get all programs with session caching
- * Programs rarely change, so cache them in session for performance
+ * Resolve shared JSON cache directory path and create it if missing.
+ * @return string|null
+ */
+function db_get_cache_dir() {
+    static $cacheDir = null;
+
+    if ($cacheDir !== null) {
+        return $cacheDir;
+    }
+
+    $cacheDir = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR . 'cache';
+    if (!is_dir($cacheDir) && !mkdir($cacheDir, 0755, true) && !is_dir($cacheDir)) {
+        logError('Unable to create cache directory: ' . $cacheDir, 'WARNING');
+        return null;
+    }
+
+    return $cacheDir;
+}
+
+/**
+ * Convert cache key to a filesystem-safe cache file path.
+ * @param string $cacheKey
+ * @return string|null
+ */
+function db_get_cache_file_path($cacheKey) {
+    $cacheDir = db_get_cache_dir();
+    if ($cacheDir === null) {
+        return null;
+    }
+
+    $safeKey = preg_replace('/[^a-zA-Z0-9_-]/', '_', (string)$cacheKey);
+    if ($safeKey === '' || $safeKey === null) {
+        return null;
+    }
+
+    return $cacheDir . DIRECTORY_SEPARATOR . $safeKey . '.json';
+}
+
+/**
+ * Read JSON payload from cache if still fresh.
+ * @param string $cacheKey
+ * @param int $ttlSeconds
+ * @return mixed|null
+ */
+function db_read_json_cache($cacheKey, $ttlSeconds) {
+    $cachePath = db_get_cache_file_path($cacheKey);
+    if ($cachePath === null || !is_file($cachePath)) {
+        return null;
+    }
+
+    $ttlSeconds = (int)$ttlSeconds;
+    if ($ttlSeconds > 0 && (time() - filemtime($cachePath)) > $ttlSeconds) {
+        return null;
+    }
+
+    $raw = @file_get_contents($cachePath);
+    if ($raw === false || $raw === '') {
+        return null;
+    }
+
+    $decoded = json_decode($raw, true);
+    return json_last_error() === JSON_ERROR_NONE ? $decoded : null;
+}
+
+/**
+ * Persist JSON payload to cache.
+ * @param string $cacheKey
+ * @param mixed $payload
+ * @return void
+ */
+function db_write_json_cache($cacheKey, $payload) {
+    $cachePath = db_get_cache_file_path($cacheKey);
+    if ($cachePath === null) {
+        return;
+    }
+
+    @file_put_contents($cachePath, json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
+}
+
+/**
+ * Delete a JSON cache file.
+ * @param string $cacheKey
+ * @return void
+ */
+function db_delete_json_cache($cacheKey) {
+    $cachePath = db_get_cache_file_path($cacheKey);
+    if ($cachePath !== null && is_file($cachePath)) {
+        @unlink($cachePath);
+    }
+}
+
+/**
+ * Get all programs with request + file cache.
  * @param mysqli $conn Database connection
  * @param bool $forceRefresh Force refresh from database
  * @return array List of programs
  */
 function getCachedPrograms($conn, $forceRefresh = false) {
-    $cacheKey = 'cached_programs';
-    $cacheTimeKey = 'cached_programs_time';
+    static $requestPrograms = null;
+
+    $cacheKey = 'programs_v1';
     $cacheExpiry = 3600; // 1 hour cache
-    
-    // Check if cache exists and is still valid
-    if (!$forceRefresh && 
-        isset($_SESSION[$cacheKey]) && 
-        isset($_SESSION[$cacheTimeKey]) &&
-        (time() - $_SESSION[$cacheTimeKey]) < $cacheExpiry) {
-        return $_SESSION[$cacheKey];
+
+    if (!$forceRefresh && is_array($requestPrograms)) {
+        return $requestPrograms;
     }
-    
+
+    if (!$forceRefresh) {
+        $cachedPrograms = db_read_json_cache($cacheKey, $cacheExpiry);
+        if (is_array($cachedPrograms)) {
+            $requestPrograms = $cachedPrograms;
+            return $cachedPrograms;
+        }
+    }
+
     // Fetch from database
     $result = db_query($conn, "SELECT program_id, program_code, program_name, description FROM programs ORDER BY program_name");
     $programs = $result ? db_fetch_all($result) : [];
-    
-    // Store in session cache
-    $_SESSION[$cacheKey] = $programs;
-    $_SESSION[$cacheTimeKey] = time();
-    
+
+    db_write_json_cache($cacheKey, $programs);
+    $requestPrograms = $programs;
+
     return $programs;
+}
+
+/**
+ * Get system settings with request + short file cache.
+ * @param mysqli $conn Database connection
+ * @param array|null $keys Optional list of keys to return
+ * @param bool $forceRefresh Force refresh from database
+ * @return array
+ */
+function getSystemSettings($conn, $keys = null, $forceRefresh = false) {
+    static $requestSettings = null;
+
+    $cacheKey = 'system_settings_v1';
+    $cacheExpiry = 60;
+    $settings = null;
+
+    if (!$forceRefresh && is_array($requestSettings)) {
+        $settings = $requestSettings;
+    }
+
+    if ($settings === null && !$forceRefresh) {
+        $cachedSettings = db_read_json_cache($cacheKey, $cacheExpiry);
+        if (is_array($cachedSettings)) {
+            $settings = $cachedSettings;
+        }
+    }
+
+    if ($settings === null) {
+        $settings = [];
+        $settingsResult = db_query($conn, "SELECT setting_key, setting_value FROM system_settings");
+        if ($settingsResult) {
+            while ($row = $settingsResult->fetch_assoc()) {
+                $settings[$row['setting_key']] = $row['setting_value'];
+            }
+        }
+
+        db_write_json_cache($cacheKey, $settings);
+    }
+
+    $requestSettings = $settings;
+
+    if (!is_array($keys) || empty($keys)) {
+        return $settings;
+    }
+
+    $filteredSettings = [];
+    foreach ($keys as $key) {
+        $key = (string)$key;
+        if (array_key_exists($key, $settings)) {
+            $filteredSettings[$key] = $settings[$key];
+        }
+    }
+
+    return $filteredSettings;
+}
+
+/**
+ * Get a single system setting value.
+ * @param mysqli $conn Database connection
+ * @param string $key Setting key
+ * @param mixed $default Default value when key is missing
+ * @param bool $forceRefresh Force refresh from database
+ * @return mixed
+ */
+function getSystemSetting($conn, $key, $default = null, $forceRefresh = false) {
+    $settings = getSystemSettings($conn, null, $forceRefresh);
+    return array_key_exists($key, $settings) ? $settings[$key] : $default;
 }
 
 /**
  * Clear all cached data
  */
 function clearCache() {
-    unset($_SESSION['cached_programs']);
-    unset($_SESSION['cached_programs_time']);
+    db_delete_json_cache('programs_v1');
+    db_delete_json_cache('system_settings_v1');
 }
 
 /**
@@ -221,11 +378,7 @@ function db_exists($conn, $table, $where, $types = '', $params = []) {
  */
 function get_student_term_options($conn, $student_id) {
     // 1. Get System Settings for Current Term defaults
-    $settings_res = db_query($conn, "SELECT setting_key, setting_value FROM system_settings");
-    $sys_settings = [];
-    while ($row = $settings_res->fetch_assoc()) {
-        $sys_settings[$row['setting_key']] = $row['setting_value'];
-    }
+    $sys_settings = getSystemSettings($conn);
     $current_sys_ay = $sys_settings['current_academic_year'] ?? (date('Y') . '-' . (date('Y') + 1));
 
     // 2. Get Student Info for "Current" context

@@ -3,6 +3,11 @@
 require_once __DIR__ . '/../config/db_helpers.php';
 require_once __DIR__ . '/../config/api_response_helpers.php';
 
+// Release session lock to avoid serializing concurrent API calls.
+if (session_status() === PHP_SESSION_ACTIVE) {
+    session_write_close();
+}
+
 if (!isset($_GET['student_id']) || !isset($_GET['ay'])) {
     api_respond_error(
         'Missing required parameters',
@@ -14,6 +19,7 @@ if (!isset($_GET['student_id']) || !isset($_GET['ay'])) {
 
 $student_id = intval($_GET['student_id']);
 $ay = trim((string)$_GET['ay']);
+$force_refresh = isset($_GET['refresh']) && $_GET['refresh'] === '1';
 
 if ($student_id <= 0) {
     api_respond_error('Invalid student id', 422, 'invalid_student_id');
@@ -21,6 +27,18 @@ if ($student_id <= 0) {
 
 if ($ay === '') {
     api_respond_error('Invalid academic year', 422, 'invalid_academic_year');
+}
+
+$cache_key = 'student_conflicts_' . sha1($student_id . '|' . $ay);
+if (!$force_refresh) {
+    $cached_payload = db_read_json_cache($cache_key, 20);
+    if (is_array($cached_payload)) {
+        api_respond_success($cached_payload, 200, [
+            'student_id' => $student_id,
+            'academic_year' => $ay,
+            'cached' => true,
+        ]);
+    }
 }
 
 $conn = getDBConnection();
@@ -49,25 +67,44 @@ function isOverlap($s1, $s2) {
 
 $count = count($schedules);
 for ($i = 0; $i < $count; $i++) {
+    $current = $schedules[$i];
     for ($j = $i + 1; $j < $count; $j++) {
-        if (isOverlap($schedules[$i], $schedules[$j])) {
+        $candidate = $schedules[$j];
+
+        // Because rows are sorted by day/start_time, once day changes there are no more
+        // comparisons needed for the current row.
+        if ($candidate['day_of_week'] !== $current['day_of_week']) {
+            break;
+        }
+
+        // For the same day, no overlap is possible once the next class starts
+        // at or after the current class end.
+        if ($candidate['start_time'] >= $current['end_time']) {
+            break;
+        }
+
+        if (isOverlap($current, $candidate)) {
             $conflicts[] = [
-                'day' => $schedules[$i]['day_of_week'],
-                's1' => $schedules[$i]['course_code'],
-                't1' => $schedules[$i]['start_time'] . '-' . $schedules[$i]['end_time'],
-                's2' => $schedules[$j]['course_code'],
-                't2' => $schedules[$j]['start_time'] . '-' . $schedules[$j]['end_time']
+                'day' => $current['day_of_week'],
+                's1' => $current['course_code'],
+                't1' => $current['start_time'] . '-' . $current['end_time'],
+                's2' => $candidate['course_code'],
+                't2' => $candidate['start_time'] . '-' . $candidate['end_time']
             ];
         }
     }
 }
 
-$conn->close();
-api_respond_success([
+$payload = [
     'conflicts' => $conflicts,
-    'count' => count($conflicts)
-], 200, [
+    'count' => count($conflicts),
+];
+
+$conn->close();
+db_write_json_cache($cache_key, $payload);
+api_respond_success($payload, 200, [
     'student_id' => $student_id,
-    'academic_year' => $ay
+    'academic_year' => $ay,
+    'cached' => false,
 ]);
 ?>

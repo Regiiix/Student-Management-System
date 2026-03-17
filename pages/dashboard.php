@@ -8,11 +8,7 @@ require_once '../config/db_helpers.php';
 $conn = getDBConnection();
 
 // Get system settings
-$settings = [];
-$set_res = db_query($conn, "SELECT setting_key, setting_value FROM system_settings");
-while ($row = $set_res->fetch_assoc()) {
-    $settings[$row['setting_key']] = $row['setting_value'];
-}
+$settings = getSystemSettings($conn);
 $current_ay = $settings['current_academic_year'] ?? (date('Y') . '-' . (date('Y') + 1));
 
 // Get available academic years

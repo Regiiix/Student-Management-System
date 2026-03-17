@@ -1,6 +1,9 @@
 # Logs
 logs/*.log
+logs/cache/*.json
+logs/cache/*.tmp
 !logs/.gitkeep
+!logs/cache/.gitkeep
 
 # Environment files
 .env

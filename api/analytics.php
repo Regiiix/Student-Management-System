@@ -102,9 +102,7 @@ $conn = getDBConnection();
 
 // Get current academic year from settings if not specified
 if (!$academic_year) {
-    $settings_res = db_query($conn, "SELECT setting_value FROM system_settings WHERE setting_key = 'current_academic_year'");
-    $setting = db_fetch_one($settings_res);
-    $academic_year = $setting['setting_value'] ?? (date('Y') . '-' . (date('Y') + 1));
+    $academic_year = (string)getSystemSetting($conn, 'current_academic_year', (date('Y') . '-' . (date('Y') + 1)));
 }
 
 $response = [];

@@ -2,8 +2,14 @@
 require_once __DIR__ . '/../config/db_helpers.php';
 require_once __DIR__ . '/../config/api_response_helpers.php';
 
+// Release session lock to avoid serializing concurrent API calls.
+if (session_status() === PHP_SESSION_ACTIVE) {
+    session_write_close();
+}
+
 $curriculum_id = isset($_GET['curriculum_id']) ? intval($_GET['curriculum_id']) : 0;
 $academic_year = isset($_GET['ay']) ? trim((string)$_GET['ay']) : '';
+$force_refresh = isset($_GET['refresh']) && $_GET['refresh'] === '1';
 
 if ($curriculum_id <= 0 || empty($academic_year)) {
     api_respond_error(
@@ -12,6 +18,18 @@ if ($curriculum_id <= 0 || empty($academic_year)) {
         'invalid_parameters',
         ['required' => ['curriculum_id', 'ay']]
     );
+}
+
+$cache_key = 'class_details_' . sha1($curriculum_id . '|' . $academic_year);
+if (!$force_refresh) {
+    $cached_payload = db_read_json_cache($cache_key, 30);
+    if (is_array($cached_payload)) {
+        api_respond_success($cached_payload, 200, [
+            'curriculum_id' => $curriculum_id,
+            'academic_year' => $academic_year,
+            'cached' => true,
+        ]);
+    }
 }
 
 $conn = getDBConnection();
@@ -106,8 +124,10 @@ $payload = [
 ];
 
 $conn->close();
+db_write_json_cache($cache_key, $payload);
 api_respond_success($payload, 200, [
     'curriculum_id' => $curriculum_id,
-    'academic_year' => $academic_year
+    'academic_year' => $academic_year,
+    'cached' => false,
 ]);
 ?>
