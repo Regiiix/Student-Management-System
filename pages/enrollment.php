@@ -7,6 +7,7 @@ $conn = getDBConnection();
 $message = '';
 $message_type = '';
 $csrf_scope = 'enrollment_management';
+csrf_ensure_session();
 
 // Current date context: February 24, 2026
 // Current academic year is 2025-2026

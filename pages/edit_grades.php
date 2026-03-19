@@ -13,6 +13,7 @@ $conn = getDBConnection();
 $message = '';
 $message_type = '';
 $csrf_scope = 'edit_grades_' . $student_id;
+csrf_ensure_session();
 
 // Get student data
 $sql = "SELECT s.*, p.program_name, p.program_code 

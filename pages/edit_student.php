@@ -13,6 +13,7 @@ $conn = getDBConnection();
 $message = '';
 $message_type = '';
 $csrf_scope = 'edit_student_' . $student_id;
+csrf_ensure_session();
 $system_current_ay = (string)getSystemSetting($conn, 'current_academic_year', (date('Y') . '-' . (date('Y') + 1)));
 
 // Get student data

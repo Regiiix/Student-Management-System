@@ -1057,4 +1057,3 @@ function getComprehensiveFinancialSummary($conn, $student_id, $ay, $sem) {
         'status' => $balance <= 0 ? 'Paid' : ($pending_late['days_overdue'] > 0 ? 'Overdue' : 'Unpaid')
     ];
 }
-?>

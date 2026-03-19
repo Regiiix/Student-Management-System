@@ -13,6 +13,7 @@ if ($student_id <= 0) {
 $conn = getDBConnection();
 $message = '';
 $csrf_scope = 'student_finance_payment';
+csrf_ensure_session();
 
 // --- Handle Payment ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'payment') {

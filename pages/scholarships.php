@@ -11,6 +11,7 @@ $conn = getDBConnection();
 $message = '';
 $message_type = '';
 $csrf_scope = 'scholarships_management';
+csrf_ensure_session();
 
 // Get current academic year from settings
 $settings = getSystemSettings($conn);

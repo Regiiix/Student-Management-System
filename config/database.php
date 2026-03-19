@@ -51,5 +51,4 @@ function getDBConnection() {
     
     return $conn;
 }
-?>
 
