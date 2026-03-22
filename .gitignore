@@ -25,6 +25,7 @@ Thumbs.db
 *.tmp
 *.bak
 *.cache
+/temp_*.php
 
 # PHP dependencies (if using Composer in future)
 /vendor/

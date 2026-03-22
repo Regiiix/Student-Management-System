@@ -7,6 +7,7 @@ A PHP-based web application for managing student records, enrollments, schedules
 ## Table of Contents
 - [Features](#features)
 - [Project Structure](#project-structure)
+- [Repository Conventions](#repository-conventions)
 - [Database Schema](#database-schema)
 - [Pages Overview](#pages-overview)
 - [Recent Changes](#recent-changes)
@@ -64,53 +65,80 @@ A PHP-based web application for managing student records, enrollments, schedules
 
 ```
 student_system21/
-├── index.php                 # Main student list & curriculum view
-├── README.md                 # This documentation
-├── .gitignore                # Git ignore rules
-│
-├── pages/                    # PHP page files
-│   ├── add_student.php       # Add new student form
-│   ├── drop_student.php      # Drop student confirmation
-│   ├── enrollment.php        # Enrollment page with term code, program, schedule selection
-│   ├── edit_student.php      # Edit student information
-│   ├── edit_grades.php       # Grade entry form
-│   ├── student_personal.php  # Student personal information
-│   ├── student_finance.php   # Student account & payment records
-│   └── student_schedule_grades.php # Grades & Schedule View
-│
-├── config/                   # Configuration files
-│   ├── database.php          # Database connection (singleton, error logging)
-│   ├── db_helpers.php        # Database helpers (caching, transactions)
-│   ├── finance_helpers.php   # Financial calculation helpers
-│   └── schedule_validator.php # Conflict prevention validators
-│
-├── api/                      # AJAX Endpoints
-│   ├── get_class_details.php # Fetch class roster for modals
-│   └── dashboard_stats.php   # Data source for dashboard charts
-│
-├── css/                      # Stylesheets
-│   ├── common.css            # Shared styles, typography, variables
-│   ├── index.css             # Index page specific styles
-│   └── details.css           # Detail pages styles
-│
-├── js/                       # JavaScript files
-│   └── app.js                # Form validation, debouncing, utilities
-│
-├── logs/                     # Error logs (auto-generated)
-│   └── .gitkeep              # Placeholder for git
-│
-├── tools/                    # Utility Scripts
-│   └── debug/                # Debugging and verification tools
-│       ├── check_schema.php
-│       └── check_enrollments.php
-│
-└── database/                 # SQL files
-   ├── schema.sql            # Table definitions with indexes
-   ├── data.sql              # Sample data for testing
-   ├── migration_program_tuition.sql
-   ├── migration_performance_indexes.sql
-   └── complete_database.sql # Optional full DB export for transfer
+├── index.php                      # Main app shell (students/programs/curriculum views)
+├── landing.php                    # Public landing page
+├── README.md                      # Project documentation
+├── .gitignore
+├── .htaccess
+├── favicon.ico
+├── api/                           # PHP API endpoints
+│   ├── analytics.php
+│   ├── check_student_conflicts.php
+│   ├── dashboard_stats.php
+│   └── get_class_details.php
+├── config/                        # Shared helpers and app config
+│   ├── academic_helpers.php
+│   ├── api_auth_helpers.php
+│   ├── api_response_helpers.php
+│   ├── csrf_helpers.php
+│   ├── database.php
+│   ├── db_helpers.php
+│   ├── finance_helpers.php
+│   └── sidebar.php
+├── css/                           # Stylesheets
+│   ├── common.css
+│   ├── details.css
+│   ├── finance_bundle.css
+│   ├── forms_bundle.css
+│   ├── index.css
+│   └── reports_bundle.css
+├── js/
+│   └── app.js
+├── pages/                         # Feature pages
+│   ├── add_student.php
+│   ├── dashboard.php
+│   ├── drop_student.php
+│   ├── edit_grades.php
+│   ├── edit_student.php
+│   ├── enrollment.php
+│   ├── finance.php
+│   ├── promote_student.php
+│   ├── scholarships.php
+│   ├── student_finance.php
+│   ├── student_personal.php
+│   └── student_schedule_grades.php
+├── database/                      # Schema, seed data, migrations, backups
+│   ├── backups/
+│   ├── complete_database.sql
+│   ├── data.sql
+│   ├── migration_merit_cleanup.sql
+│   ├── migration_performance_indexes.sql
+│   ├── migration_program_tuition.sql
+│   └── schema.sql
+├── docs/
+├── images/
+├── logs/
+└── tools/
+   └── diagnostics/               # Temporary/local verification scripts
+      ├── README.md
+      ├── temp_check_promotion.php
+      ├── temp_current_term.php
+      ├── temp_finance_discount_check.php
+      └── temp_finance_discount_check2.php
 ```
+
+---
+
+## Repository Conventions
+
+- Keep the project root limited to core entry files and top-level app folders.
+- Put temporary verification scripts in [tools/diagnostics](tools/diagnostics), not in root.
+- Name temporary scripts with the `temp_` prefix.
+- Store SQL schema and migration files only in [database](database).
+- Keep long-form implementation notes and session writeups in [docs](docs).
+- Add new page endpoints under [pages](pages) and shared helpers under [config](config).
+- Use [logs](logs) only for runtime-generated logs and cache artifacts.
+- Keep generated or backup SQL dumps in [database/backups](database/backups) when applicable.
 
 ---
 
