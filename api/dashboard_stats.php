@@ -2,6 +2,9 @@
 // api/dashboard_stats.php
 require_once __DIR__ . '/../config/db_helpers.php';
 require_once __DIR__ . '/../config/api_response_helpers.php';
+require_once __DIR__ . '/../config/api_auth_helpers.php';
+
+api_auth_require_valid_token();
 
 // Release PHP session lock so concurrent API calls are not serialized per user session.
 if (session_status() === PHP_SESSION_ACTIVE) {

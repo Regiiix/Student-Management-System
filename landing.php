@@ -44,29 +44,6 @@ $hero_actions = [
     ],
 ];
 
-$workflow_intro = 'Follow this path to keep enrollment and records updated each term.';
-
-$workflow_steps = [
-    [
-        'number' => '01',
-        'title' => 'Review Student Records',
-        'text' => 'Check student profiles and status before processing term activity.',
-        'href' => $landing_routes['students'],
-    ],
-    [
-        'number' => '02',
-        'title' => 'Process Enrollment',
-        'text' => 'Assign classes and confirm enrolled students for the active term.',
-        'href' => $landing_routes['enrollment'],
-    ],
-    [
-        'number' => '03',
-        'title' => 'Reconcile Finance',
-        'text' => 'Track balances, payments, and scholarship impact in one view.',
-        'href' => $landing_routes['finance'],
-    ],
-];
-
 if ($current_semester === '1') {
     $landing_focus = [
         'label' => 'Enrollment Intake Focus',
@@ -88,28 +65,6 @@ if ($current_semester === '1') {
         ],
     ];
 
-    $workflow_intro = 'Use this intake sequence to keep the first semester launch clean and fast.';
-
-    $workflow_steps = [
-        [
-            'number' => '01',
-            'title' => 'Validate Student Roster',
-            'text' => 'Confirm active status, year level, and student profile completeness.',
-            'href' => $landing_routes['students'],
-        ],
-        [
-            'number' => '02',
-            'title' => 'Finalize Enrollment',
-            'text' => 'Process registrations and class assignments for the opening weeks.',
-            'href' => $landing_routes['enrollment'],
-        ],
-        [
-            'number' => '03',
-            'title' => 'Confirm Billing and Aid',
-            'text' => 'Review tuition balances and scholarship coverage after enrollment posting.',
-            'href' => $landing_routes['finance'],
-        ],
-    ];
 } elseif ($current_semester === '2') {
     $landing_focus = [
         'label' => 'Progress and Retention Focus',
@@ -131,28 +86,6 @@ if ($current_semester === '1') {
         ],
     ];
 
-    $workflow_intro = 'Use this retention sequence to maintain momentum in the second semester.';
-
-    $workflow_steps = [
-        [
-            'number' => '01',
-            'title' => 'Track Performance Signals',
-            'text' => 'Check analytics trends and identify students needing follow-up.',
-            'href' => $landing_routes['analytics'],
-        ],
-        [
-            'number' => '02',
-            'title' => 'Process Adds and Drops',
-            'text' => 'Update enrollment changes and class assignments without delay.',
-            'href' => $landing_routes['enrollment'],
-        ],
-        [
-            'number' => '03',
-            'title' => 'Reconcile Balances and Aid',
-            'text' => 'Follow up unpaid balances and confirm scholarship application.',
-            'href' => $landing_routes['finance'],
-        ],
-    ];
 }
 
 $operation_lanes = [
@@ -160,10 +93,6 @@ $operation_lanes = [
         'eyebrow' => 'Registrar Desk',
         'title' => 'Student Records Desk',
         'description' => 'For profile updates, active status checks, and student information cleanup.',
-        'checks' => [
-            'Update student status and profile changes',
-            'Review year level and section assignments',
-        ],
         'href' => $landing_routes['students'],
         'cta' => 'Start with Student Records',
     ],
@@ -171,10 +100,6 @@ $operation_lanes = [
         'eyebrow' => 'Enrollment Desk',
         'title' => 'Term Enrollment Queue',
         'description' => 'For registration processing, class load updates, and term finalization.',
-        'checks' => [
-            'Process enrollments and section changes',
-            'Validate subject load and schedule alignment',
-        ],
         'href' => $landing_routes['enrollment'],
         'cta' => 'Open Enrollment',
     ],
@@ -182,63 +107,8 @@ $operation_lanes = [
         'eyebrow' => 'Finance Desk',
         'title' => 'Collections and Scholarship Review',
         'description' => 'For payment follow-up, balance monitoring, and aid confirmation.',
-        'checks' => [
-            'Review outstanding balances and receipts',
-            'Validate scholarship coverage and discount rules',
-        ],
         'href' => $landing_routes['finance'],
         'cta' => 'Open Finance',
-    ],
-];
-
-$landing_metric_counts = [
-    'students' => 0,
-    'programs' => 0,
-    'courses' => 0,
-    'enrollments' => 0,
-];
-
-$metrics_result = db_query(
-    $conn,
-    "SELECT
-        (SELECT COUNT(*) FROM students) AS students_count,
-        (SELECT COUNT(*) FROM programs) AS programs_count,
-        (SELECT COUNT(*) FROM curriculum) AS courses_count,
-        (SELECT COUNT(*) FROM enrollments WHERE academic_year = ?) AS enrollments_count",
-    's',
-    [$current_ay]
-);
-
-if ($metrics_result) {
-    $metrics_row = db_fetch_one($metrics_result);
-    if ($metrics_row) {
-        $landing_metric_counts['students'] = (int)($metrics_row['students_count'] ?? 0);
-        $landing_metric_counts['programs'] = (int)($metrics_row['programs_count'] ?? 0);
-        $landing_metric_counts['courses'] = (int)($metrics_row['courses_count'] ?? 0);
-        $landing_metric_counts['enrollments'] = (int)($metrics_row['enrollments_count'] ?? 0);
-    }
-}
-
-$landing_metrics = [
-    [
-        'label' => 'Students',
-        'value' => $landing_metric_counts['students'],
-        'icon' => 'bi-people-fill',
-    ],
-    [
-        'label' => 'Programs',
-        'value' => $landing_metric_counts['programs'],
-        'icon' => 'bi-journal-richtext',
-    ],
-    [
-        'label' => 'Courses',
-        'value' => $landing_metric_counts['courses'],
-        'icon' => 'bi-book-half',
-    ],
-    [
-        'label' => 'Enrollments (AY)',
-        'value' => $landing_metric_counts['enrollments'],
-        'icon' => 'bi-person-check-fill',
     ],
 ];
 
@@ -273,8 +143,8 @@ $landing_cards = [
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Student Management System</title>
-    <link rel="icon" href="<?php echo htmlspecialchars(app_asset('favicon.ico')); ?>" type="image/x-icon">
+    <title>Enrollment Management System</title>
+    <link rel="icon" href="<?php echo htmlspecialchars(app_asset('images/site-favicon.svg')); ?>" type="image/svg+xml">
     <link rel="preload" as="image" href="<?php echo htmlspecialchars($landing_background_image_url, ENT_QUOTES); ?>" fetchpriority="high">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/index.css')); ?>">
@@ -287,12 +157,11 @@ $landing_cards = [
         <section class="card landing-topbar" aria-label="Landing header">
             <a href="landing.php" class="landing-brand" aria-label="Student Management home">
                 <span class="landing-brand-mark" aria-hidden="true"><i class="bi bi-mortarboard-fill"></i></span>
-                <span class="landing-brand-text">Student Management</span>
+                <span class="landing-brand-text">Enrollment Management</span>
             </a>
 
             <div class="landing-topbar-meta">
-                <p class="landing-topbar-title">Unified Campus Workspace</p>
-                <p class="landing-topbar-note">Start with Daily Start Lanes, then move to support modules only when needed.</p>
+                <p class="landing-topbar-title">Campus Operations Home</p>
             </div>
         </section>
 
@@ -300,7 +169,7 @@ $landing_cards = [
             <div class="landing-hero-layout">
                 <div class="landing-hero-copy">
                     <p class="landing-kicker">Campus Operations Hub</p>
-                    <h1>Student Management System</h1>
+                    <h1>Enrollment Management System</h1>
                     <p class="landing-summary">Run daily registrar, enrollment, and finance work in one connected system built for term-based operations.</p>
                     <div class="landing-context" aria-label="Current term">
                         <span class="landing-pill"><i class="bi bi-calendar-event" aria-hidden="true"></i><?php echo htmlspecialchars($current_ay); ?></span>
@@ -320,16 +189,6 @@ $landing_cards = [
             </div>
         </section>
 
-        <section class="landing-metrics-grid" aria-label="System snapshot">
-            <?php foreach ($landing_metrics as $metric): ?>
-                <article class="card landing-metric-card">
-                    <div class="landing-metric-icon" aria-hidden="true"><i class="bi <?php echo htmlspecialchars($metric['icon']); ?>"></i></div>
-                    <p class="landing-metric-value"><?php echo number_format((int)$metric['value']); ?></p>
-                    <p class="landing-metric-label"><?php echo htmlspecialchars($metric['label']); ?></p>
-                </article>
-            <?php endforeach; ?>
-        </section>
-
         <section class="card landing-lanes" aria-label="Daily operation lanes">
             <div class="landing-lanes-head">
                 <h2>Daily Start Lanes</h2>
@@ -341,11 +200,6 @@ $landing_cards = [
                         <p class="landing-lane-eyebrow"><?php echo htmlspecialchars($lane['eyebrow']); ?></p>
                         <h3><?php echo htmlspecialchars($lane['title']); ?></h3>
                         <p><?php echo htmlspecialchars($lane['description']); ?></p>
-                        <ul class="landing-lane-checks" aria-label="Lane checklist">
-                            <?php foreach ($lane['checks'] as $check): ?>
-                                <li><i class="bi bi-check2-circle" aria-hidden="true"></i><?php echo htmlspecialchars($check); ?></li>
-                            <?php endforeach; ?>
-                        </ul>
                         <a class="btn" href="<?php echo htmlspecialchars($lane['href']); ?>">
                             <i class="bi bi-arrow-right-circle" aria-hidden="true"></i>
                             <?php echo htmlspecialchars($lane['cta']); ?>
@@ -365,32 +219,12 @@ $landing_cards = [
                     <a class="landing-card landing-card-<?php echo htmlspecialchars($card['accent']); ?>" href="<?php echo htmlspecialchars($card['href']); ?>">
                         <span class="landing-card-icon" aria-hidden="true"><i class="bi <?php echo htmlspecialchars($card['icon']); ?>"></i></span>
                         <span class="landing-card-title"><?php echo htmlspecialchars($card['title']); ?></span>
-                        <span class="landing-card-text"><?php echo htmlspecialchars($card['description']); ?></span>
-                        <span class="landing-card-cta">Open support module <i class="bi bi-arrow-right" aria-hidden="true"></i></span>
+                        <span class="landing-card-cta">Open module <i class="bi bi-arrow-right" aria-hidden="true"></i></span>
                     </a>
                 <?php endforeach; ?>
             </div>
         </section>
 
-        <section class="card landing-workflow" aria-label="Recommended flow">
-            <div class="landing-workflow-head">
-                <h2>Recommended Workflow</h2>
-                <p><?php echo htmlspecialchars($workflow_intro); ?></p>
-            </div>
-            <div class="landing-workflow-grid">
-                <?php foreach ($workflow_steps as $step): ?>
-                    <a class="landing-step" href="<?php echo htmlspecialchars($step['href']); ?>">
-                        <span class="landing-step-number"><?php echo htmlspecialchars($step['number']); ?></span>
-                        <span class="landing-step-title"><?php echo htmlspecialchars($step['title']); ?></span>
-                        <span class="landing-step-text"><?php echo htmlspecialchars($step['text']); ?></span>
-                    </a>
-                <?php endforeach; ?>
-            </div>
-        </section>
-
-        <section class="card landing-meta-strip" aria-label="System notes">
-            <p><strong>Tip:</strong> After entering the system, use the in-app sidebar to move between modules without losing workflow context.</p>
-        </section>
     </main>
 </body>
 </html>

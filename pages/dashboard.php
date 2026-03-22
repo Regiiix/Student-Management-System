@@ -4,12 +4,14 @@
  * Comprehensive reporting and analytics for the student management system
  */
 require_once '../config/db_helpers.php';
+require_once '../config/api_auth_helpers.php';
 
 $conn = getDBConnection();
 
 // Get system settings
 $settings = getSystemSettings($conn);
 $current_ay = $settings['current_academic_year'] ?? (date('Y') . '-' . (date('Y') + 1));
+$api_access_token = api_auth_issue_token();
 
 // Get available academic years
 $ay_sql = "SELECT DISTINCT academic_year FROM enrollments ORDER BY academic_year DESC";
@@ -43,7 +45,7 @@ $conn->close();
             <p id="dashboardLastUpdated" class="dashboard-last-updated" aria-live="polite">Last updated: --</p>
             <p id="dashboardCacheAge" class="dashboard-last-updated" aria-live="polite">Cache age: --</p>
             <div class="quick-links">
-                <a href="../index.php" class="quick-link"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Students</a>
+                <a href="../index.php?view=students" class="quick-link"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Students</a>
                 <a href="finance.php" class="quick-link"><i class="bi bi-wallet2" aria-hidden="true"></i>Finance</a>
                 <a href="scholarships.php" class="quick-link"><i class="bi bi-award" aria-hidden="true"></i>Scholarships</a>
             </div>
@@ -286,6 +288,8 @@ $conn->close();
     </main>
 
     <script>
+        const STUDENT_SYSTEM_API_TOKEN = <?php echo json_encode($api_access_token, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
+
         // Chart instances
         let charts = {};
         let isRefreshing = false;
@@ -529,6 +533,7 @@ $conn->close();
 
         async function loadReportIntoCache(reportType, ay, sem, filterKey, cacheBucket, options = {}) {
             const bypassCache = options.bypassCache === true;
+            const forceRefresh = options.forceRefresh === true;
             if (!bypassCache) {
                 const cachedData = getCachedReportData(cacheBucket, reportType);
                 if (cachedData) {
@@ -541,7 +546,7 @@ $conn->close();
                 return inFlightReportLoads.get(requestKey);
             }
 
-            const requestPromise = fetchReport(reportType, ay, sem)
+            const requestPromise = fetchReport(reportType, ay, sem, forceRefresh)
                 .then((resolvedData) => {
                     setCachedReport(cacheBucket, reportType, resolvedData);
                     return resolvedData;
@@ -791,7 +796,10 @@ $conn->close();
             try {
                 await Promise.all(
                     reportsToFetch.map((reportType) =>
-                        loadReportIntoCache(reportType, ay, sem, filterKey, cacheBucket, { bypassCache: forceRefresh })
+                        loadReportIntoCache(reportType, ay, sem, filterKey, cacheBucket, {
+                            bypassCache: forceRefresh,
+                            forceRefresh,
+                        })
                     )
                 );
                 renderFromCache(cacheBucket, activeTab);
@@ -817,12 +825,17 @@ $conn->close();
             }
         }
         
-        async function fetchReport(type, ay, sem) {
-            const url = `../api/analytics.php?type=${type}&ay=${encodeURIComponent(ay)}${sem ? '&sem=' + sem : ''}`;
+        async function fetchReport(type, ay, sem, forceRefresh = false) {
+            const url = `../api/analytics.php?type=${type}&ay=${encodeURIComponent(ay)}${sem ? '&sem=' + sem : ''}${forceRefresh ? '&refresh=1' : ''}`;
+            const requestHeaders = {
+                'Accept': 'application/json'
+            };
+            if (STUDENT_SYSTEM_API_TOKEN) {
+                requestHeaders['X-Api-Token'] = STUDENT_SYSTEM_API_TOKEN;
+            }
+
             const response = await fetch(url, {
-                headers: {
-                    'Accept': 'application/json'
-                }
+                headers: requestHeaders
             });
             const payload = await response.json();
             const fallbackError = 'Failed to load analytics report.';

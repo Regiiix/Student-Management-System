@@ -1,6 +1,8 @@
 <?php
 require_once '../config/db_helpers.php';
+require_once '../config/csrf_helpers.php';
 require_once '../config/academic_helpers.php';
+require_once '../config/api_auth_helpers.php';
 require_once '../config/sidebar.php';
 
 $student_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
@@ -14,27 +16,71 @@ $active_tab = isset($_GET['tab']) && in_array($_GET['tab'], ['schedule', 'grades
 $conn = getDBConnection();
 $message = '';
 $message_type = '';
+$csrf_scope = 'student_schedule_grades_' . $student_id;
+csrf_ensure_session();
+$api_access_token = api_auth_issue_token();
+
+$submission_token_key = 'student_schedule_grades_submission_tokens';
+$submission_token_ttl_seconds = 3600;
+if (!isset($_SESSION[$submission_token_key]) || !is_array($_SESSION[$submission_token_key])) {
+    $_SESSION[$submission_token_key] = [];
+}
+
+$submission_now = time();
+foreach ($_SESSION[$submission_token_key] as $token_value => $token_created_at) {
+    if (!is_int($token_created_at) || ($submission_now - $token_created_at) > $submission_token_ttl_seconds) {
+        unset($_SESSION[$submission_token_key][$token_value]);
+    }
+}
+
+try {
+    $student_records_submission_token = bin2hex(random_bytes(16));
+} catch (Exception $e) {
+    $student_records_submission_token = hash('sha256', uniqid('student_records_', true));
+}
+$_SESSION[$submission_token_key][$student_records_submission_token] = $submission_now;
 
 // --- HANDLE ENROLLMENT ACTIONS ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $action = $_POST['action'];
     $post_student_id = intval($_POST['student_id']);
+    $submitted_submission_token = trim((string)($_POST['submission_token'] ?? ''));
     
-    if ($post_student_id === $student_id) { // Security check
+    if ($submitted_submission_token === '' || !isset($_SESSION[$submission_token_key][$submitted_submission_token])) {
+        $message = 'This records update request was already submitted or expired. Please reload and try again.';
+        $message_type = 'error';
+    } else {
+        unset($_SESSION[$submission_token_key][$submitted_submission_token]);
+
+    if (!csrf_validate_request_token($csrf_scope, 'csrf_token', false)) {
+        $message = 'Invalid or expired security token. Please refresh and try again.';
+        $message_type = 'error';
+    } elseif ($post_student_id === $student_id) { // Security check
         if ($action === 'drop' && isset($_POST['curriculum_id'])) {
             $curriculum_id_to_drop = intval($_POST['curriculum_id']);
-            
-            // Decrement enrolled count using prepared statement
-            db_query($conn, "UPDATE schedules SET enrolled_count = GREATEST(0, enrolled_count - 1) WHERE curriculum_id = ?", 'i', [$curriculum_id_to_drop]);
-            
-            // Remove enrollment
-            $del_sql = "DELETE FROM enrollments WHERE student_id = ? AND curriculum_id = ?";
-            if (db_query($conn, $del_sql, 'ii', [$student_id, $curriculum_id_to_drop])) {
-                $message = 'Course dropped successfully.';
-                $message_type = 'success';
-            } else {
-                $message = 'Failed to drop course.';
+
+            if (!$conn->begin_transaction()) {
+                $message = 'Unable to start drop transaction. Please try again.';
                 $message_type = 'error';
+            } else {
+                try {
+                    if (!db_query($conn, "UPDATE schedules SET enrolled_count = GREATEST(0, enrolled_count - 1) WHERE curriculum_id = ?", 'i', [$curriculum_id_to_drop])) {
+                        throw new Exception('Failed to decrement schedule count');
+                    }
+
+                    $del_sql = "DELETE FROM enrollments WHERE student_id = ? AND curriculum_id = ?";
+                    if (!db_query($conn, $del_sql, 'ii', [$student_id, $curriculum_id_to_drop])) {
+                        throw new Exception('Failed to delete enrollment');
+                    }
+
+                    $conn->commit();
+                    $message = 'Course dropped successfully.';
+                    $message_type = 'success';
+                } catch (Exception $e) {
+                    $conn->rollback();
+                    $message = 'Failed to drop course.';
+                    $message_type = 'error';
+                }
             }
         } elseif ($action === 'enroll' && isset($_POST['curriculum_id'])) {
             $curriculum_id_to_add = intval($_POST['curriculum_id']);
@@ -137,28 +183,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 
                 if (!$conflict) {
-                    $ins_sql = "INSERT INTO enrollments (student_id, curriculum_id, academic_year, status) VALUES (?, ?, ?, 'Enrolled')";
-                    if (db_query($conn, $ins_sql, 'iis', [$student_id, $curriculum_id_to_add, $academic_year_add])) {
-                        // Increment enrolled count using prepared statement
-                        db_query($conn, "UPDATE schedules SET enrolled_count = enrolled_count + 1 WHERE curriculum_id = ?", 'i', [$curriculum_id_to_add]);
-                        
-                         // Ensure semester_status exists for this term
-                        $target_yl = intval($c_info['year_level']);
-                        $target_sem = intval($c_info['semester']);
-                        $chk_status = db_query($conn, "SELECT status_id FROM semester_status WHERE student_id = ? AND academic_year = ? AND semester = ?", 'isi', [$student_id, $academic_year_add, $target_sem]);
-                        if ($chk_status && $chk_status->num_rows == 0) {
-                             $ins_status = "INSERT INTO semester_status (student_id, year_level, semester, academic_year, status) VALUES (?, ?, ?, ?, 'In Progress')";
-                             db_query($conn, $ins_status, 'iiis', [$student_id, $target_yl, $target_sem, $academic_year_add]);
-                        } else {
-                            // If exists but was Completed/Incomplete, move to In Progress if enrolling again
-                            db_query($conn, "UPDATE semester_status SET status = 'In Progress', updated_at = NOW() WHERE student_id = ? AND academic_year = ? AND semester = ? AND status != 'In Progress'", 'isi', [$student_id, $academic_year_add, $target_sem]);
-                        }
-
-                        $message = 'Enrolled successfully.';
-                        $message_type = 'success';
-                    } else {
-                        $message = 'Failed to enroll.';
+                    if (!$conn->begin_transaction()) {
+                        $message = 'Unable to start enrollment transaction. Please try again.';
                         $message_type = 'error';
+                    } else {
+                        try {
+                            $ins_sql = "INSERT INTO enrollments (student_id, curriculum_id, academic_year, status) VALUES (?, ?, ?, 'Enrolled')";
+                            if (!db_query($conn, $ins_sql, 'iis', [$student_id, $curriculum_id_to_add, $academic_year_add])) {
+                                throw new Exception('Failed to insert enrollment');
+                            }
+
+                            if (!db_query($conn, "UPDATE schedules SET enrolled_count = enrolled_count + 1 WHERE curriculum_id = ?", 'i', [$curriculum_id_to_add])) {
+                                throw new Exception('Failed to increment schedule count');
+                            }
+
+                            $target_yl = intval($c_info['year_level']);
+                            $target_sem = intval($c_info['semester']);
+                            $chk_status = db_query($conn, "SELECT status_id FROM semester_status WHERE student_id = ? AND academic_year = ? AND semester = ?", 'isi', [$student_id, $academic_year_add, $target_sem]);
+                            if ($chk_status === false) {
+                                throw new Exception('Failed to check semester status');
+                            }
+
+                            if ($chk_status->num_rows == 0) {
+                                $ins_status = "INSERT INTO semester_status (student_id, year_level, semester, academic_year, status) VALUES (?, ?, ?, ?, 'In Progress')";
+                                if (!db_query($conn, $ins_status, 'iiis', [$student_id, $target_yl, $target_sem, $academic_year_add])) {
+                                    throw new Exception('Failed to create semester status');
+                                }
+                            } else {
+                                if (!db_query($conn, "UPDATE semester_status SET status = 'In Progress', updated_at = NOW() WHERE student_id = ? AND academic_year = ? AND semester = ? AND status != 'In Progress'", 'isi', [$student_id, $academic_year_add, $target_sem])) {
+                                    throw new Exception('Failed to update semester status');
+                                }
+                            }
+
+                            $conn->commit();
+                            $message = 'Enrolled successfully.';
+                            $message_type = 'success';
+                        } catch (Exception $e) {
+                            $conn->rollback();
+                            $message = 'Failed to enroll.';
+                            $message_type = 'error';
+                        }
                     }
                 }
             }
@@ -185,102 +249,160 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $enrolled_count = 0;
                 $failed_count = 0;
                 $reasons = [];
-                
-                foreach ($avail_courses as $ac) {
-                    $cid = $ac['curriculum_id'];
-                    $block_enrollment = false;
-                    $fail_reason = "";
+                $db_error = false;
+                $existing_sched_by_sem = [];
 
-                    // 1. Check Prerequisite
-                    if (!empty($ac['prerequisite_id'])) {
-                        $pre_sql = "SELECT status, final_grade FROM enrollments WHERE student_id = ? AND curriculum_id = ?";
-                        $pre_chk = db_fetch_one(db_query($conn, $pre_sql, 'ii', [$student_id, $ac['prerequisite_id']]));
-                        $passed = false;
-                        if ($pre_chk && ($pre_chk['status'] === 'Passed' || ($pre_chk['final_grade'] > 0 && $pre_chk['final_grade'] <= 3.0))) {
-                             $passed = true;
-                        }
-                        if (!$passed) {
-                            $block_enrollment = true;
-                            $fail_reason = "Prereq missing";
-                        }
-                    }
+                if (!$conn->begin_transaction()) {
+                    $message = 'Unable to start batch enrollment transaction. Please try again.';
+                    $message_type = 'error';
+                } else {
+                    foreach ($avail_courses as $ac) {
+                        $cid = $ac['curriculum_id'];
+                        $block_enrollment = false;
+                        $fail_reason = "";
 
-                    // 2. Check Capacity & Conflict (Simplified for bulk: skip checks? No, must check)
-                    // If we want to be strict, we check collisions. 
-                    // For now, let's assume we proceed unless Schedule Full or Prereq fail.
-                    // Conflict checking in bulk is complex because enrolling in Course A might conflict with Course B in the same batch.
-                    // Simple approach: Check against *currently enrolled*, and as we iterate, we don't check against *batch items* (limitation)
-                    // Or precise approach: Update scheds list as we go.
-                    
-                    if (!$block_enrollment) {
-                        $new_sched_sql = "SELECT schedule_id, day_of_week, start_time, end_time, capacity, enrolled_count FROM schedules WHERE curriculum_id = ?";
-                        $new_scheds = db_fetch_all(db_query($conn, $new_sched_sql, 'i', [$cid]));
-                        
-                        // Check Full
-                        foreach ($new_scheds as $ns) {
-                            if ($ns['enrolled_count'] >= $ns['capacity']) {
-                                $block_enrollment = true;
-                                $fail_reason = "Full";
+                        // 1. Check Prerequisite
+                        if (!empty($ac['prerequisite_id'])) {
+                            $pre_sql = "SELECT status, final_grade FROM enrollments WHERE student_id = ? AND curriculum_id = ?";
+                            $pre_res = db_query($conn, $pre_sql, 'ii', [$student_id, $ac['prerequisite_id']]);
+                            if ($pre_res === false) {
+                                $db_error = true;
                                 break;
                             }
+                            $pre_chk = db_fetch_one($pre_res);
+                            $passed = false;
+                            if ($pre_chk && ($pre_chk['status'] === 'Passed' || ($pre_chk['final_grade'] > 0 && $pre_chk['final_grade'] <= 3.0))) {
+                                 $passed = true;
+                            }
+                            if (!$passed) {
+                                $block_enrollment = true;
+                                $fail_reason = "Prereq missing";
+                            }
                         }
+
+                        // 2. Check Capacity & Conflict (Simplified for bulk: skip checks? No, must check)
+                        // If we want to be strict, we check collisions. 
+                        // For now, let's assume we proceed unless Schedule Full or Prereq fail.
+                        // Conflict checking in bulk is complex because enrolling in Course A might conflict with Course B in the same batch.
+                        // Simple approach: Check against *currently enrolled*, and as we iterate, we don't check against *batch items* (limitation)
+                        // Or precise approach: Update scheds list as we go.
                         
-                        // Check Conflict (against DB enrollments only)
                         if (!$block_enrollment) {
-                             $curr_sched_sql = "SELECT s.day_of_week, s.start_time, s.end_time 
+                            $new_sched_sql = "SELECT schedule_id, day_of_week, start_time, end_time, capacity, enrolled_count FROM schedules WHERE curriculum_id = ?";
+                            $new_sched_res = db_query($conn, $new_sched_sql, 'i', [$cid]);
+                            if ($new_sched_res === false) {
+                                $db_error = true;
+                                break;
+                            }
+                            $new_scheds = db_fetch_all($new_sched_res);
+                            
+                            // Check Full
+                            foreach ($new_scheds as $ns) {
+                                if ($ns['enrolled_count'] >= $ns['capacity']) {
+                                    $block_enrollment = true;
+                                    $fail_reason = "Full";
+                                    break;
+                                }
+                            }
+                            
+                            // Check Conflict (against DB enrollments only)
+                            if (!$block_enrollment) {
+                                $target_sem = intval($ac['semester']);
+                                if (!isset($existing_sched_by_sem[$target_sem])) {
+                                    $curr_sched_sql = "SELECT s.day_of_week, s.start_time, s.end_time 
                                            FROM enrollments e 
                                            JOIN schedules s ON e.curriculum_id = s.curriculum_id 
                                            JOIN curriculum c ON e.curriculum_id = c.curriculum_id
                                            WHERE e.student_id = ? AND e.academic_year = ? AND c.semester = ? AND e.status = 'Enrolled'";
-                            $target_sem = $ac['semester'];
-                            $curr_scheds = db_fetch_all(db_query($conn, $curr_sched_sql, 'isi', [$student_id, $academic_year_add, $target_sem]));
-                            
-                            foreach ($new_scheds as $ns) {
-                                foreach ($curr_scheds as $cs) {
-                                    if ($ns['day_of_week'] === $cs['day_of_week']) {
-                                        if ($ns['start_time'] < $cs['end_time'] && $cs['start_time'] < $ns['end_time']) {
-                                            $block_enrollment = true;
-                                            $fail_reason = "Conflict";
-                                            break 2;
+                                    $curr_sched_res = db_query($conn, $curr_sched_sql, 'isi', [$student_id, $academic_year_add, $target_sem]);
+                                    if ($curr_sched_res === false) {
+                                        $db_error = true;
+                                        break;
+                                    }
+                                    $existing_sched_by_sem[$target_sem] = db_fetch_all($curr_sched_res);
+                                }
+                                $curr_scheds = $existing_sched_by_sem[$target_sem];
+                                
+                                foreach ($new_scheds as $ns) {
+                                    foreach ($curr_scheds as $cs) {
+                                        if ($ns['day_of_week'] === $cs['day_of_week']) {
+                                            if ($ns['start_time'] < $cs['end_time'] && $cs['start_time'] < $ns['end_time']) {
+                                                $block_enrollment = true;
+                                                $fail_reason = "Conflict";
+                                                break 2;
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                    
-                    if (!$block_enrollment) {
-                        $ins_sql = "INSERT INTO enrollments (student_id, curriculum_id, academic_year, status) VALUES (?, ?, ?, 'Enrolled')";
-                        if (db_query($conn, $ins_sql, 'iis', [$student_id, $cid, $academic_year_add])) {
-                            db_query($conn, "UPDATE schedules SET enrolled_count = enrolled_count + 1 WHERE curriculum_id = ?", 'i', [$cid]);
-                            $enrolled_count++;
 
-                            // Ensure semester_status exists
-                             $chk_status = db_query($conn, "SELECT status_id FROM semester_status WHERE student_id = ? AND academic_year = ? AND semester = ?", 'isi', [$student_id, $academic_year_add, $selected_sem_all]);
-                            if ($chk_status && $chk_status->num_rows == 0) {
-                                 $ins_status = "INSERT INTO semester_status (student_id, year_level, semester, academic_year, status) VALUES (?, ?, ?, ?, 'In Progress')";
-                                 db_query($conn, $ins_status, 'iiis', [$student_id, $selected_year_all, $selected_sem_all, $academic_year_add]);
+                        if ($db_error) {
+                            break;
+                        }
+
+                        if (!$block_enrollment) {
+                            $ins_sql = "INSERT INTO enrollments (student_id, curriculum_id, academic_year, status) VALUES (?, ?, ?, 'Enrolled')";
+                            if (db_query($conn, $ins_sql, 'iis', [$student_id, $cid, $academic_year_add])) {
+                                if (!db_query($conn, "UPDATE schedules SET enrolled_count = enrolled_count + 1 WHERE curriculum_id = ?", 'i', [$cid])) {
+                                    $db_error = true;
+                                    break;
+                                }
+                                $enrolled_count++;
+
+                                // Ensure semester_status exists
+                                 $chk_status = db_query($conn, "SELECT status_id FROM semester_status WHERE student_id = ? AND academic_year = ? AND semester = ?", 'isi', [$student_id, $academic_year_add, $selected_sem_all]);
+                                if ($chk_status === false) {
+                                    $db_error = true;
+                                    break;
+                                }
+                                if ($chk_status->num_rows == 0) {
+                                     $ins_status = "INSERT INTO semester_status (student_id, year_level, semester, academic_year, status) VALUES (?, ?, ?, ?, 'In Progress')";
+                                     if (!db_query($conn, $ins_status, 'iiis', [$student_id, $selected_year_all, $selected_sem_all, $academic_year_add])) {
+                                        $db_error = true;
+                                        break;
+                                     }
+                                } else {
+                                     if (!db_query($conn, "UPDATE semester_status SET status = 'In Progress', updated_at = NOW() WHERE student_id = ? AND academic_year = ? AND semester = ? AND status != 'In Progress'", 'isi', [$student_id, $academic_year_add, $selected_sem_all])) {
+                                        $db_error = true;
+                                        break;
+                                     }
+                                }
+
+                                foreach ($new_scheds as $ns) {
+                                    $existing_sched_by_sem[intval($ac['semester'])][] = [
+                                        'day_of_week' => $ns['day_of_week'],
+                                        'start_time' => $ns['start_time'],
+                                        'end_time' => $ns['end_time'],
+                                    ];
+                                }
                             } else {
-                                 db_query($conn, "UPDATE semester_status SET status = 'In Progress', updated_at = NOW() WHERE student_id = ? AND academic_year = ? AND semester = ? AND status != 'In Progress'", 'isi', [$student_id, $academic_year_add, $selected_sem_all]);
+                                $failed_count++;
                             }
                         } else {
                             $failed_count++;
+                            $reasons[] = $ac['course_code'] . " ($fail_reason)";
                         }
+                    }
+                    
+                    if ($db_error) {
+                        $conn->rollback();
+                        $message = 'Batch enrollment failed due to a database error. No changes were saved.';
+                        $message_type = 'error';
                     } else {
-                        $failed_count++;
-                        $reasons[] = $ac['course_code'] . " ($fail_reason)";
+                        $conn->commit();
+
+                        if ($enrolled_count > 0) {
+                            $message = "Batch Enrollment: Successfully enrolled in $enrolled_count courses.";
+                            $message_type = 'success';
+                            if ($failed_count > 0) {
+                                $message .= " ($failed_count failed: " . implode(', ', array_slice($reasons, 0, 3)) . (count($reasons)>3 ? '...' : '') . ")";
+                            }
+                        } else {
+                            $message = "No courses enrolled. " . implode(', ', $reasons);
+                            $message_type = 'error';
+                        }
                     }
-                }
-                
-                if ($enrolled_count > 0) {
-                    $message = "Batch Enrollment: Successfully enrolled in $enrolled_count courses.";
-                    $message_type = 'success';
-                    if ($failed_count > 0) {
-                        $message .= " ($failed_count failed: " . implode(', ', array_slice($reasons, 0, 3)) . (count($reasons)>3 ? '...' : '') . ")";
-                    }
-                } else {
-                    $message = "No courses enrolled. " . implode(', ', $reasons);
-                    $message_type = 'error';
                 }
 
             } else {
@@ -303,33 +425,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $enrolled_courses = db_fetch_all(db_query($conn, $enrolled_sql, 'isii', [$student_id, $target_ay, $target_year, $target_sem]));
 
                 if (!empty($enrolled_courses)) {
-                    $drop_count = 0;
-                    $cids = [];
-                    foreach($enrolled_courses as $ec) {
-                        $cids[] = $ec['curriculum_id'];
-                    }
+                    $cids = array_values(array_unique(array_map('intval', array_column($enrolled_courses, 'curriculum_id'))));
+                    $drop_count = count($cids);
 
-                    // Decrement enrolled count using prepared statement with IN clause
-                    // Note: db_query helper might not support dynamic IN well directly with arrays without manual placeholder building
-                    // So we loop to be safe and consistent with existing db_helpers or correct patterns.
-                    // Or we can do one by one.
-                    foreach ($cids as $cid) {
-                         db_query($conn, "UPDATE schedules SET enrolled_count = GREATEST(0, enrolled_count - 1) WHERE curriculum_id = ?", 'i', [$cid]);
-                    }
+                    if (!$conn->begin_transaction()) {
+                        $message = 'Unable to start drop-all transaction. Please try again.';
+                        $message_type = 'error';
+                    } else {
+                        try {
+                            $placeholders = implode(',', array_fill(0, count($cids), '?'));
+                            $types = str_repeat('i', count($cids));
 
-                    // Delete enrollments
-                     // To be safe, delete one by one or matching criteria
-                    $del_all_sql = "DELETE FROM enrollments WHERE student_id = ? AND academic_year = ? AND curriculum_id IN (" . implode(',', $cids) . ")";
-                    // Actually, straight delete by criteria is safer/faster
-                     $del_crit_sql = "DELETE FROM enrollments WHERE student_id = ? AND academic_year = ? AND curriculum_id IN (SELECT curriculum_id FROM curriculum WHERE year_level = ? AND semester = ?)";
-                    // But we already have CIDs.
-                    foreach ($cids as $cid) {
-                        db_query($conn, "DELETE FROM enrollments WHERE student_id = ? AND curriculum_id = ?", 'ii', [$student_id, $cid]);
-                        $drop_count++;
+                            $decrement_sql = "UPDATE schedules SET enrolled_count = GREATEST(0, enrolled_count - 1) WHERE curriculum_id IN ($placeholders)";
+                            if (!db_query($conn, $decrement_sql, $types, $cids)) {
+                                throw new Exception('Failed to update schedule counts');
+                            }
+
+                            $delete_sql = "DELETE FROM enrollments WHERE student_id = ? AND academic_year = ? AND curriculum_id IN ($placeholders)";
+                            $delete_types = 'is' . $types;
+                            $delete_params = array_merge([$student_id, $target_ay], $cids);
+                            if (!db_query($conn, $delete_sql, $delete_types, $delete_params)) {
+                                throw new Exception('Failed to remove enrollments');
+                            }
+
+                            $conn->commit();
+                            $message = "Successfully dropped all $drop_count courses.";
+                            $message_type = 'success';
+                        } catch (Exception $e) {
+                            $conn->rollback();
+                            $message = 'Failed to drop all courses for this term.';
+                            $message_type = 'error';
+                        }
                     }
-                    
-                    $message = "Successfully dropped all $drop_count courses.";
-                    $message_type = 'success';
                 } else {
                     $message = "No enrolled courses found to drop for this term.";
                     $message_type = 'warning';
@@ -339,6 +466,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                  $message_type = 'error';
             }
         }
+    } else {
+        $message = 'Invalid student context for this action.';
+        $message_type = 'error';
+    }
     }
 }
 
@@ -1028,6 +1159,40 @@ if (!$is_ajax) {
                             }
                         });
 
+                        document.addEventListener('submit', (event) => {
+                            if (event.defaultPrevented) {
+                                return;
+                            }
+
+                            const form = event.target;
+                            if (!(form instanceof HTMLFormElement)) {
+                                return;
+                            }
+
+                            const method = (form.getAttribute('method') || '').toLowerCase();
+                            if (method !== 'post') {
+                                return;
+                            }
+
+                            if (form.dataset.submitting === '1') {
+                                event.preventDefault();
+                                return;
+                            }
+
+                            form.dataset.submitting = '1';
+                            const submitter = event.submitter || form.querySelector('button[type="submit"], input[type="submit"]');
+                            if (!submitter) {
+                                return;
+                            }
+
+                            submitter.disabled = true;
+                            if (submitter.tagName === 'BUTTON') {
+                                const originalText = submitter.textContent;
+                                submitter.dataset.originalText = originalText || '';
+                                submitter.textContent = 'Processing...';
+                            }
+                        });
+
                         document.addEventListener('click', (event) => {
                             const tabLink = event.target.closest('.tabs .tab-link');
                             if (tabLink) {
@@ -1088,6 +1253,8 @@ if (!$is_ajax) {
                                 <button type="button" data-schedule-action="check-conflicts" class="btn btn-conflict-check">Check Conflicts</button>
                                 <?php if (!$is_all_terms && $selected_year > 0 && $selected_semester > 0): ?>
                                     <form method="post" action="" style="display:inline-block;" data-confirm="Are you sure you want to DROP ALL subjects for this semester? This action cannot be undone." data-confirm-title="Drop All Subjects" data-confirm-text="Drop All" data-confirm-style="danger">
+                                        <?php echo csrf_token_field($csrf_scope); ?>
+                                        <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($student_records_submission_token); ?>">
                                         <input type="hidden" name="action" value="drop_all">
                                         <input type="hidden" name="student_id" value="<?php echo $student_id; ?>">
                                         <input type="hidden" name="academic_year" value="<?php echo htmlspecialchars($selected_ay); ?>">
@@ -1127,6 +1294,8 @@ if (!$is_ajax) {
                                             <td><?php echo htmlspecialchars($course['units']); ?></td>
                                             <td class="row-action-cell">
                                                 <form method="post" class="inline-form" data-confirm="Drop <?php echo htmlspecialchars($course['course_code']); ?>?" data-confirm-title="Drop Course" data-confirm-text="Drop" data-confirm-style="danger">
+                                                    <?php echo csrf_token_field($csrf_scope); ?>
+                                                    <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($student_records_submission_token); ?>">
                                                     <input type="hidden" name="action" value="drop">
                                                     <input type="hidden" name="student_id" value="<?php echo $student_id; ?>">
                                                     <input type="hidden" name="curriculum_id" value="<?php echo $cid; ?>">
@@ -1169,6 +1338,8 @@ if (!$is_ajax) {
                                             <td><?php echo htmlspecialchars($course['description'] ?? ''); ?></td>
                                             <td>
                                                  <form method="post" class="inline-form" data-confirm="Drop <?php echo htmlspecialchars($course['course_code']); ?>?" data-confirm-title="Drop Course" data-confirm-text="Drop" data-confirm-style="danger">
+                                                    <?php echo csrf_token_field($csrf_scope); ?>
+                                                    <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($student_records_submission_token); ?>">
                                                     <input type="hidden" name="action" value="drop">
                                                     <input type="hidden" name="student_id" value="<?php echo $student_id; ?>">
                                                     <input type="hidden" name="curriculum_id" value="<?php echo $course['curriculum_id']; ?>">
@@ -1189,6 +1360,8 @@ if (!$is_ajax) {
                             <div class="section-header mb-sm">
                                 <h3>Available Courses to Enroll (Year <?php echo $selected_year; ?>, Sem <?php echo $selected_semester; ?>)</h3>
                                 <form method="post" class="inline-form" data-confirm="Enroll in ALL available courses?" data-confirm-title="Enroll All Available" data-confirm-text="Enroll All" data-confirm-style="primary">
+                                    <?php echo csrf_token_field($csrf_scope); ?>
+                                    <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($student_records_submission_token); ?>">
                                     <input type="hidden" name="action" value="enroll_all">
                                     <input type="hidden" name="student_id" value="<?php echo $student_id; ?>">
                                     <input type="hidden" name="academic_year" value="<?php echo htmlspecialchars($selected_ay); ?>">
@@ -1220,6 +1393,8 @@ if (!$is_ajax) {
                                                 <td><?php echo htmlspecialchars($ac['semester']); ?></td>
                                                 <td>
                                                     <form method="post" class="inline-form">
+                                                        <?php echo csrf_token_field($csrf_scope); ?>
+                                                        <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($student_records_submission_token); ?>">
                                                         <input type="hidden" name="action" value="enroll">
                                                         <input type="hidden" name="student_id" value="<?php echo $student_id; ?>">
                                                         <input type="hidden" name="curriculum_id" value="<?php echo $ac['curriculum_id']; ?>">
@@ -1536,6 +1711,8 @@ if (!$is_ajax) {
 </div>
 
 <script>
+    const STUDENT_SYSTEM_API_TOKEN = <?php echo json_encode($api_access_token, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
+
     const conflictModal = document.getElementById('conflictModal');
     const classModal = document.getElementById('classModal');
     
@@ -1555,7 +1732,12 @@ if (!$is_ajax) {
         title.innerText = 'Class Details';
 
         try {
-            const response = await fetch(`../api/get_class_details.php?curriculum_id=${curriculumId}&ay=${ay}`);
+            const response = await fetch(`../api/get_class_details.php?curriculum_id=${curriculumId}&ay=${ay}`, {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Api-Token': STUDENT_SYSTEM_API_TOKEN
+                }
+            });
             const payload = await response.json();
             const fallbackError = 'Unable to load class details.';
 
@@ -1654,7 +1836,12 @@ if (!$is_ajax) {
             const studentId = <?php echo $student_id; ?>;
             const ay = "<?php echo $selected_ay; ?>";
             
-            const response = await fetch(`../api/check_student_conflicts.php?student_id=${studentId}&ay=${ay}`);
+            const response = await fetch(`../api/check_student_conflicts.php?student_id=${studentId}&ay=${ay}`, {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Api-Token': STUDENT_SYSTEM_API_TOKEN
+                }
+            });
             const payload = await response.json();
             const fallbackError = 'Unable to check schedule conflicts.';
 

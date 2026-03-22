@@ -15,23 +15,91 @@ $message = '';
 $csrf_scope = 'student_finance_payment';
 csrf_ensure_session();
 
-// --- Handle Payment ---
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'payment') {
+if (!isset($_SESSION['student_finance_payment_tokens']) || !is_array($_SESSION['student_finance_payment_tokens'])) {
+    $_SESSION['student_finance_payment_tokens'] = [];
+}
+
+// Keep token storage bounded and expire tokens after one hour.
+$token_now = time();
+foreach ($_SESSION['student_finance_payment_tokens'] as $stored_token => $stored_time) {
+    if (!is_int($stored_time) || ($token_now - $stored_time) > 3600) {
+        unset($_SESSION['student_finance_payment_tokens'][$stored_token]);
+    }
+}
+
+$finance_submission_token = bin2hex(random_bytes(16));
+$_SESSION['student_finance_payment_tokens'][$finance_submission_token] = $token_now;
+
+// --- Handle Finance Actions ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if (!csrf_validate_request_token($csrf_scope)) {
         $message = 'Invalid or expired security token. Please refresh the page and try again.';
     } else {
-        $amount = floatval($_POST['amount']);
-        $notes = trim($_POST['notes']);
-        $sy = $_POST['academic_year']; 
-        $sem = intval($_POST['semester']);
+        $submitted_payment_token = trim((string)($_POST['submission_token'] ?? ''));
+        if ($submitted_payment_token === '' || !isset($_SESSION['student_finance_payment_tokens'][$submitted_payment_token])) {
+            $message = 'This payment form was already submitted or expired. Please try again.';
+        } else {
+            unset($_SESSION['student_finance_payment_tokens'][$submitted_payment_token]);
 
-        if ($amount > 0) {
-            $ins_sql = "INSERT INTO payments (student_id, amount, academic_year, semester, notes, payment_date) VALUES (?, ?, ?, ?, ?, NOW())";
-            if (db_query($conn, $ins_sql, 'idsis', [$student_id, $amount, $sy, $sem, $notes])) {
-                $message = 'Payment recorded successfully!';
+            $action = trim((string)$_POST['action']);
+            $sy = trim((string)($_POST['academic_year'] ?? ''));
+            $sem = intval($_POST['semester'] ?? 0);
+
+            if ($action === 'payment') {
+                $amount = floatval($_POST['amount'] ?? 0);
+                $notes = trim((string)($_POST['notes'] ?? ''));
+
+                if ($amount > 0) {
+                    if ($sem < 0 || $sem > 2 || $sy === '') {
+                        $message = 'Please provide a valid academic year and semester.';
+                    } elseif ($conn->begin_transaction()) {
+                        $ins_sql = "INSERT INTO payments (student_id, amount, academic_year, semester, notes, payment_date) VALUES (?, ?, ?, ?, ?, NOW())";
+                        if (db_query($conn, $ins_sql, 'idsis', [$student_id, $amount, $sy, $sem, $notes])) {
+                            $conn->commit();
+                            $message = 'Payment recorded successfully!';
+                        } else {
+                            $conn->rollback();
+                            $message = 'Error recording payment: ' . $conn->error;
+                        }
+                    } else {
+                        $message = 'Unable to start payment transaction. Please try again.';
+                    }
+                } else {
+                    $message = 'Please enter a valid payment amount.';
+                }
+            } elseif ($action === 'add_fee') {
+                $fee_name = trim((string)($_POST['fee_name'] ?? ''));
+                $fee_amount = floatval($_POST['fee_amount'] ?? 0);
+                $fee_notes = trim((string)($_POST['fee_notes'] ?? ''));
+
+                if ($fee_name === '') {
+                    $message = 'Please provide a fee name.';
+                } elseif ($fee_amount <= 0) {
+                    $message = 'Please enter a valid fee amount.';
+                } elseif ($sem < 0 || $sem > 2 || $sy === '') {
+                    $message = 'Please provide a valid academic year and semester for the fee.';
+                } else {
+                    $ledger_note = '[Additional Fee] ' . $fee_name;
+                    if ($fee_notes !== '') {
+                        $ledger_note .= ' - ' . $fee_notes;
+                    }
+
+                    if ($conn->begin_transaction()) {
+                        $ins_fee_sql = "INSERT INTO payments (student_id, amount, academic_year, semester, notes, payment_date) VALUES (?, ?, ?, ?, ?, NOW())";
+                        $fee_ledger_amount = -abs($fee_amount);
+                        if (db_query($conn, $ins_fee_sql, 'idsis', [$student_id, $fee_ledger_amount, $sy, $sem, $ledger_note])) {
+                            $conn->commit();
+                            $message = 'Additional fee recorded successfully!';
+                        } else {
+                            $conn->rollback();
+                            $message = 'Error recording fee: ' . $conn->error;
+                        }
+                    } else {
+                        $message = 'Unable to start fee transaction. Please try again.';
+                    }
+                }
             } else {
-                // Include db error for debugging (remove in production if strict security needed, but helpful now)
-                $message = 'Error recording payment: ' . $conn->error;
+                $message = 'Invalid finance action.';
             }
         }
     }
@@ -73,9 +141,45 @@ $overpayment_list = getStudentOverpayments($conn, $student_id, true);
 // --- FILTERS ---
 // 1. Get List of Enrolled Terms (History) + Current Context using Helper
 $terms_options = get_student_term_options($conn, $student_id);
+$current_sys_ay = date('Y') . '-' . (date('Y') + 1); // Fallback if needed, but helper handles it.
+
+// Resolve student's current term context for finance form autofill.
+$student_current_yl = intval($student['year_level'] ?? 1);
+$student_current_sem = intval($student['current_semester'] ?? 1);
+if ($student_current_sem < 0 || $student_current_sem > 2) {
+        $student_current_sem = 1;
+}
+
+$student_current_ay = '';
+$current_status_sql = "SELECT academic_year
+                                             FROM semester_status
+                                             WHERE student_id = ?
+                                                 AND year_level = ?
+                                                 AND semester = ?
+                                                 AND status = 'In Progress'
+                                             ORDER BY academic_year DESC, status_id DESC
+                                             LIMIT 1";
+$current_status_row = db_fetch_one(db_query($conn, $current_status_sql, 'iii', [$student_id, $student_current_yl, $student_current_sem]));
+$student_current_ay = $current_status_row['academic_year'] ?? '';
+
+if ($student_current_ay === '') {
+        $current_enrollment_sql = "SELECT e.academic_year
+                                                             FROM enrollments e
+                                                             JOIN curriculum c ON e.curriculum_id = c.curriculum_id
+                                                             WHERE e.student_id = ?
+                                                                 AND c.year_level = ?
+                                                                 AND c.semester = ?
+                                                             ORDER BY e.academic_year DESC, e.enrollment_id DESC
+                                                             LIMIT 1";
+        $current_enrollment_row = db_fetch_one(db_query($conn, $current_enrollment_sql, 'iii', [$student_id, $student_current_yl, $student_current_sem]));
+        $student_current_ay = $current_enrollment_row['academic_year'] ?? '';
+}
+
+if ($student_current_ay === '') {
+        $student_current_ay = $current_sys_ay;
+}
 
 // 2. Handle Selection
-$current_sys_ay = date('Y') . '-' . (date('Y') + 1); // Fallback if needed, but helper handles it.
 // Default to Current Context if nothing selected
 // Helper returns current context as one of the options.
 // We need to find the "Current" one to set as default if no GET param?
@@ -89,7 +193,21 @@ $current_sys_ay = date('Y') . '-' . (date('Y') + 1); // Fallback if needed, but 
 // Just setting defaults.
 $first_opt = reset($terms_options); 
 // Note: reset() gives the first element. In helper, we added Current FIRST.
-$current_key = key($terms_options); 
+$current_key = '';
+foreach ($terms_options as $term_key => $term_option) {
+    if (
+        ($term_option['ay'] ?? '') === $student_current_ay
+        && intval($term_option['sem'] ?? 0) === $student_current_sem
+        && intval($term_option['yl'] ?? 0) === $student_current_yl
+    ) {
+        $current_key = $term_key;
+        break;
+    }
+}
+
+if ($current_key === '') {
+    $current_key = array_key_first($terms_options);
+}
 // Or better, let's just grab the key from GET or default to first.
 
 // 4. Handle Selection
@@ -202,7 +320,12 @@ $payments = db_fetch_all(db_query($conn, $pay_sql, $pay_types, $pay_params));
 // Total paid is already calculated in grand_total_paid from carry-forward calculation
 
 $finance_page_url = getAppRoute('finance', '..');
-$finance_return_url = sanitizeInternalNavigationTarget((string)($_GET['return'] ?? ''), $finance_page_url);
+$finance_return_candidate = sanitizeInternalNavigationTarget((string)($_GET['return'] ?? ''), $finance_page_url);
+$finance_return_path = parse_url($finance_return_candidate, PHP_URL_PATH);
+$finance_return_url = $finance_page_url;
+if (is_string($finance_return_path) && basename($finance_return_path) === 'finance.php') {
+    $finance_return_url = $finance_return_candidate;
+}
 $encoded_return = rawurlencode($finance_return_url);
 
 $conn->close();
@@ -322,12 +445,24 @@ if (!$is_ajax) {
                                         <td colspan="2" style="font-weight: 600; padding-top: 10px;">Scholarship Discounts</td>
                                     </tr>
                                     <?php foreach ($term['discounts'] as $disc): ?>
+                                    <?php
+                                        $discount_code = trim((string)($disc['code'] ?? ''));
+                                        $is_auto_discount = ($discount_code === 'MERIT_AUTO');
+                                        $discount_origin_label = $is_auto_discount ? 'Auto Derived' : 'Recorded';
+                                        $discount_origin_class = $is_auto_discount ? 'discount-origin-auto' : 'discount-origin-recorded';
+                                    ?>
                                     <tr class="discount-row">
                                         <td style="padding-left: 20px; color: var(--status-success);">
                                             <?php echo htmlspecialchars($disc['name']); ?>
+                                            <span class="discount-origin-badge <?php echo $discount_origin_class; ?>"><?php echo $discount_origin_label; ?></span>
                                             <span style="font-size: 0.85em;">
                                                 (<?php echo $disc['type'] === 'percentage' ? $disc['value'] . '% off ' . $disc['applies_to'] : 'Fixed ₱' . number_format($disc['value'], 2); ?>)
                                             </span>
+                                            <?php if (!empty($disc['notes'])): ?>
+                                            <div style="margin-top: 2px; font-size: 0.8em; color: var(--text-muted);">
+                                                <?php echo htmlspecialchars($disc['notes']); ?>
+                                            </div>
+                                            <?php endif; ?>
                                         </td>
                                         <td style="text-align:right; color: var(--status-success); font-weight: 500;">-₱<?php echo number_format($disc['discount_amount'], 2); ?></td>
                                     </tr>
@@ -493,16 +628,17 @@ if (!$is_ajax) {
 
             <div class="card">
                 <h3 class="section-title"><i class="bi bi-credit-card-2-front" aria-hidden="true"></i> Add Payment</h3>
-                <form method="post" action="?id=<?php echo $student_id; ?>&term=<?php echo urlencode($selected_key); ?>" class="payment-form">
+                <form method="post" action="?id=<?php echo $student_id; ?>&term=<?php echo urlencode($selected_key); ?>" class="finance-action-form payment-form">
                     <?php echo csrf_token_field($csrf_scope); ?>
                     <input type="hidden" name="action" value="payment">
+                    <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($finance_submission_token); ?>">
                     
                     <label>Academic Year</label>
-                    <input type="text" name="academic_year" value="<?php echo htmlspecialchars($filter_ay); ?>" readonly>
+                    <input type="text" name="academic_year" value="<?php echo htmlspecialchars($student_current_ay); ?>" readonly>
                     
                     <label>Semester</label>
-                    <input type="hidden" name="semester" value="<?php echo $filter_sem; ?>">
-                    <input type="text" value="<?php echo $filter_sem == 1 ? '1st Semester' : '2nd Semester'; ?>" readonly>
+                    <input type="hidden" name="semester" value="<?php echo $student_current_sem; ?>">
+                    <input type="text" value="<?php echo $student_current_sem == 1 ? '1st Semester' : ($student_current_sem == 2 ? '2nd Semester' : 'Summer Term'); ?>" readonly>
 
                     <label>Amount (₱)</label>
                     <input type="number" name="amount" step="0.01" min="1" required placeholder="Enter payment amount">
@@ -511,6 +647,36 @@ if (!$is_ajax) {
                     <textarea name="notes" rows="3" placeholder="Reference number, bank, payment method, etc."></textarea>
 
                     <button type="submit" class="btn-pay">Record Payment</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h3 class="section-title"><i class="bi bi-receipt-cutoff" aria-hidden="true"></i> Add Fee</h3>
+                <form method="post" action="?id=<?php echo $student_id; ?>&term=<?php echo urlencode($selected_key); ?>" class="finance-action-form add-fee-form">
+                    <?php echo csrf_token_field($csrf_scope); ?>
+                    <input type="hidden" name="action" value="add_fee">
+                    <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($finance_submission_token); ?>">
+
+                    <label>Fee Name</label>
+                    <input type="text" name="fee_name" required maxlength="120" placeholder="e.g., Intramurals Fee or T-Shirt Fee">
+
+                    <label>Amount (₱)</label>
+                    <input type="number" name="fee_amount" step="0.01" min="0.01" required placeholder="Enter fee amount">
+
+                    <label>Academic Year</label>
+                    <input type="text" name="academic_year" value="<?php echo htmlspecialchars($student_current_ay); ?>" required placeholder="e.g., 2026-2027">
+
+                    <label>Semester</label>
+                    <select name="semester" required>
+                        <option value="0" <?php echo $student_current_sem === 0 ? 'selected' : ''; ?>>Summer Term</option>
+                        <option value="1" <?php echo $student_current_sem === 1 ? 'selected' : ''; ?>>1st Semester</option>
+                        <option value="2" <?php echo $student_current_sem === 2 ? 'selected' : ''; ?>>2nd Semester</option>
+                    </select>
+
+                    <label>Notes (Optional)</label>
+                    <textarea name="fee_notes" rows="3" placeholder="Additional details for this fee"></textarea>
+
+                    <button type="submit" class="btn-fee">Add Fee</button>
                 </form>
             </div>
         </div>
@@ -565,6 +731,29 @@ if (!$is_ajax) {
             }
 
             updateFinanceFilter(filterSelect.value);
+        });
+
+        document.addEventListener('submit', function(event) {
+            const form = event.target.closest('form.finance-action-form');
+            if (!form) {
+                return;
+            }
+
+            if (form.dataset.submitting === '1') {
+                event.preventDefault();
+                return;
+            }
+
+            form.dataset.submitting = '1';
+            const submitter = event.submitter || form.querySelector('button[type="submit"], input[type="submit"]');
+            if (submitter) {
+                submitter.disabled = true;
+                if (submitter.tagName === 'BUTTON') {
+                    submitter.textContent = form.classList.contains('add-fee-form') ? 'Saving Fee...' : 'Recording...';
+                } else {
+                    submitter.value = form.classList.contains('add-fee-form') ? 'Saving Fee...' : 'Recording...';
+                }
+            }
         });
     </script>
 

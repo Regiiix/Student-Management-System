@@ -22,6 +22,41 @@ if (!$result || $result->num_rows === 0) {
     exit;
 }
 $student = db_fetch_one($result);
+
+$semester_value = intval($student['current_semester'] ?? 0);
+if ($semester_value === 1) {
+    $semester_label = '1st Sem';
+} elseif ($semester_value === 2) {
+    $semester_label = '2nd Sem';
+} elseif ($semester_value === 0) {
+    $semester_label = 'Summer';
+} else {
+    $semester_label = 'Sem ' . $semester_value;
+}
+
+$term_summary = '';
+$term_options = get_student_term_options($conn, $student_id);
+$current_year_level = intval($student['year_level'] ?? 0);
+$current_ay = '';
+
+foreach ($term_options as $option) {
+    if (intval($option['yl']) === $current_year_level && intval($option['sem']) === $semester_value) {
+        $current_ay = (string)($option['ay'] ?? '');
+        if (strpos((string)($option['label'] ?? ''), '- Current') !== false) {
+            break;
+        }
+    }
+}
+
+if ($current_ay === '') {
+    $settings = getSystemSettings($conn);
+    $current_ay = (string)($settings['current_academic_year'] ?? '');
+}
+
+if ($current_ay !== '') {
+    $term_summary = $semester_label . ' | A.Y. ' . $current_ay;
+}
+
 $conn->close();
 
 $student_list_url = getStudentListReturnUrl('..');
@@ -123,21 +158,19 @@ $edit_student_url = appendReturnParam('edit_student.php?id=' . $student_id, $stu
                             <td><?php echo htmlspecialchars($student['program_code'] ?? 'N/A'); ?></td>
                             <th>Year Level</th>
                             <td>
-                                <?php 
-                                    $sys_ay = date('Y') . '-' . (date('Y') + 1);
-                                    // Try to fetch specific if available or just use this default? 
-                                    // Better to fetch system settings if I can, but I'll stick to a simple robust default if I don't want to query again.
-                                    // Actually, let's just do a quick inline check if we want perfection, but the user asked for "current".
-                                    // I'll assume standard calculation or student's 'enrollment' context? 
-                                    // The student doesn't have an "enrolled AY" column on the student table directly, usually derived from enrollments.
-                                    // But let's just append the semester column from students table which exists: `current_semester`.
-                                    // And for School Year, we can show the current system year.
-                                    echo htmlspecialchars($student['year_level']); 
-                                ?> 
+                                <?php echo htmlspecialchars($student['year_level']); ?>
+                                <?php if ($term_summary !== ''): ?>
                                 <span style="color: #666; font-size: 0.9em;">
-                                    (Sem <?php echo htmlspecialchars($student['current_semester']); ?> | A.Y. <?php echo date('Y') . '-' . (date('Y') + 1); ?>)
+                                    (<?php echo htmlspecialchars($term_summary); ?>)
                                 </span>
+                                <?php endif; ?>
                             </td>
+                        </tr>
+                        <tr>
+                            <th>Current Semester</th>
+                            <td><?php echo htmlspecialchars($semester_label); ?></td>
+                            <th>Current Academic Year</th>
+                            <td><?php echo htmlspecialchars($current_ay !== '' ? $current_ay : 'N/A'); ?></td>
                         </tr>
                         <tr>
                             <th>Program Name</th>

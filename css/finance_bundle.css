@@ -538,8 +538,8 @@ body.page-student-finance th, body.page-student-finance td { padding: 10px 12px;
 body.page-student-finance th { background: #f9fafb; color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
 body.page-student-finance .section-title { font-size: 1.1em; border-bottom: 2px solid var(--border-color); padding-bottom: 8px; margin-bottom: 15px; margin-top: 0; color: var(--text-main); font-weight: 600; }
 
-body.page-student-finance .payment-form label { display: block; margin-bottom: 6px; font-weight: 500; font-size: 13px; color: var(--text-muted); }
-body.page-student-finance .payment-form input, body.page-student-finance .payment-form select, body.page-student-finance .payment-form textarea {
+body.page-student-finance .finance-action-form label { display: block; margin-bottom: 6px; font-weight: 500; font-size: 13px; color: var(--text-muted); }
+body.page-student-finance .finance-action-form input, body.page-student-finance .finance-action-form select, body.page-student-finance .finance-action-form textarea {
     width: 100%;
     padding: 10px 12px;
     border: 1px solid var(--border-color);
@@ -550,12 +550,12 @@ body.page-student-finance .payment-form input, body.page-student-finance .paymen
     font-family: var(--font-ui);
     transition: border-color 0.2s, box-shadow 0.2s;
 }
-body.page-student-finance .payment-form input:focus, body.page-student-finance .payment-form select:focus, body.page-student-finance .payment-form textarea:focus {
+body.page-student-finance .finance-action-form input:focus, body.page-student-finance .finance-action-form select:focus, body.page-student-finance .finance-action-form textarea:focus {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
 }
-body.page-student-finance .payment-form input[readonly] { background: #f3f4f6; color: var(--text-muted); }
+body.page-student-finance .finance-action-form input[readonly] { background: #f3f4f6; color: var(--text-muted); }
 body.page-student-finance .btn-pay {
     width: 100%;
     padding: 12px;
@@ -569,6 +569,19 @@ body.page-student-finance .btn-pay {
     transition: all 0.15s ease;
 }
 body.page-student-finance .btn-pay:hover { background: #059669; }
+body.page-student-finance .btn-fee {
+    width: 100%;
+    padding: 12px;
+    background: var(--status-warning);
+    color: white;
+    border: none;
+    font-size: 14px;
+    font-weight: 500;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+body.page-student-finance .btn-fee:hover { background: #9a6300; }
 
 body.page-student-finance .term-filter {
     display: flex;
@@ -627,6 +640,28 @@ body.page-student-finance .assessment-section-header {
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+
+body.page-student-finance .discount-origin-badge {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    vertical-align: middle;
+}
+
+body.page-student-finance .discount-origin-recorded {
+    background: rgba(14, 165, 233, 0.14);
+    color: #075985;
+}
+
+body.page-student-finance .discount-origin-auto {
+    background: rgba(245, 158, 11, 0.18);
+    color: #92400e;
+}
 }
 body.page-student-finance .discount-row { background-color: #f0fff4 !important; }
 body.page-student-finance .discount-section-header { background-color: #d4edda !important; color: #155724 !important; }

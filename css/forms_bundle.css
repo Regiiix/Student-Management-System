@@ -953,6 +953,11 @@ body.page-edit-student .message.error {
     color: #721c24;
     border: 1px solid #f5c6cb;
 }
+body.page-edit-student .message.info {
+    background: #e7f1ff;
+    color: #0a3d77;
+    border: 1px solid #bfd9ff;
+}
 body.page-edit-student .required {
     color: #dc3545;
 }

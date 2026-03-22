@@ -6,6 +6,7 @@
 require_once '../config/db_helpers.php';
 require_once '../config/finance_helpers.php';
 require_once '../config/csrf_helpers.php';
+require_once '../config/sidebar.php';
 
 $conn = getDBConnection();
 $message = '';
@@ -16,6 +17,11 @@ csrf_ensure_session();
 // Get current academic year from settings
 $settings = getSystemSettings($conn);
 $current_ay = $settings['current_academic_year'] ?? (date('Y') . '-' . (date('Y') + 1));
+$current_sem = isset($settings['current_semester']) ? intval($settings['current_semester']) : 1;
+if ($current_sem < 0 || $current_sem > 2) {
+    $current_sem = 1;
+}
+$dashboard_page_url = getAppRoute('analytics', '..');
 
 // Handle form submissions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -27,16 +33,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             case 'award':
                 $student_id = intval($_POST['student_id'] ?? 0);
                 $scholarship_id = intval($_POST['scholarship_id'] ?? 0);
-                $ay = $_POST['academic_year'] ?? $current_ay;
+                $ay = trim((string)($_POST['academic_year'] ?? $current_ay));
                 $sem = intval($_POST['semester'] ?? 1);
                 $notes = trim($_POST['notes'] ?? '');
 
                 if ($student_id > 0 && $scholarship_id > 0) {
-                    if (awardScholarship($conn, $student_id, $scholarship_id, $ay, $sem, $notes)) {
-                        $message = 'Scholarship awarded successfully!';
-                        $message_type = 'success';
+                    if ($sem < 0 || $sem > 2 || $ay === '') {
+                        $message = 'Please provide a valid academic year and semester.';
+                        $message_type = 'error';
+                    } elseif ($conn->begin_transaction()) {
+                        if (awardScholarship($conn, $student_id, $scholarship_id, $ay, $sem, $notes)) {
+                            $conn->commit();
+                            $message = 'Scholarship awarded successfully!';
+                            $message_type = 'success';
+                        } else {
+                            $conn->rollback();
+                            $message = 'Scholarship already awarded or error occurred.';
+                            $message_type = 'error';
+                        }
                     } else {
-                        $message = 'Scholarship already awarded or error occurred.';
+                        $message = 'Unable to start scholarship transaction. Please try again.';
                         $message_type = 'error';
                     }
                 } else {
@@ -48,13 +64,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             case 'revoke':
                 $ss_id = intval($_POST['student_scholarship_id'] ?? 0);
                 if ($ss_id > 0) {
-                    if (revokeScholarship($conn, $ss_id)) {
-                        $message = 'Scholarship revoked successfully.';
-                        $message_type = 'success';
+                    if ($conn->begin_transaction()) {
+                        if (revokeScholarship($conn, $ss_id)) {
+                            $conn->commit();
+                            $message = 'Scholarship revoked successfully.';
+                            $message_type = 'success';
+                        } else {
+                            $conn->rollback();
+                            $message = 'Error revoking scholarship.';
+                            $message_type = 'error';
+                        }
                     } else {
-                        $message = 'Error revoking scholarship.';
+                        $message = 'Unable to start scholarship transaction. Please try again.';
                         $message_type = 'error';
                     }
+                } else {
+                    $message = 'Invalid scholarship reference.';
+                    $message_type = 'error';
                 }
                 break;
         }
@@ -62,23 +88,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Get all scholarships
+ensurePromotionMeritScholarships($conn);
 $scholarships = getAllScholarships($conn);
 
-// Get all students for dropdown (include current_semester for autofill)
-$students_sql = "SELECT student_id, student_number, first_name, last_name, s.current_semester, p.program_code
-                 FROM students s 
+// Get all students for dropdown with latest known term (AY + semester) for autofill.
+$students_sql = "SELECT
+                    s.student_id,
+                    s.student_number,
+                    s.first_name,
+                    s.last_name,
+                    s.current_semester,
+                    p.program_code,
+                    COALESCE(latest_terms.academic_year, ?) AS term_academic_year,
+                    COALESCE(latest_terms.semester, s.current_semester, ?) AS term_semester
+                 FROM students s
                  LEFT JOIN programs p ON s.program_id = p.program_id
+                 LEFT JOIN (
+                    SELECT
+                        e.student_id,
+                        e.academic_year,
+                        MAX(c.semester) AS semester
+                    FROM enrollments e
+                    JOIN curriculum c ON e.curriculum_id = c.curriculum_id
+                    JOIN (
+                        SELECT student_id, MAX(academic_year) AS latest_academic_year
+                        FROM enrollments
+                        GROUP BY student_id
+                    ) latest_ay ON latest_ay.student_id = e.student_id AND latest_ay.latest_academic_year = e.academic_year
+                    GROUP BY e.student_id, e.academic_year
+                 ) latest_terms ON latest_terms.student_id = s.student_id
                  WHERE s.status = 'Active'
                  ORDER BY s.last_name, s.first_name";
-$students = db_fetch_all(db_query($conn, $students_sql));
-
-// Create lookup array for JavaScript
-$students_data = [];
-foreach ($students as $st) {
-    $students_data[$st['student_id']] = [
-        'semester' => $st['current_semester']
-    ];
-}
+$students = db_fetch_all(db_query($conn, $students_sql, 'si', [$current_ay, $current_sem]));
 
 // Get filter parameters
 $filter_ay = isset($_GET['ay']) ? $_GET['ay'] : $current_ay;
@@ -145,13 +186,12 @@ $conn->close();
     <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/reports_bundle.css', '../')); ?>">
 </head>
 <body class="has-sidebar page-scholarships">
-    <?php require_once '../config/sidebar.php'; ?>
     <?php renderAppSidebar(['active' => 'scholarships', 'basePath' => '..']); ?>
     <div class="container">
         <header>
             <h1>Scholarship Management</h1>
             <div class="header-actions">
-                <a href="../index.php" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Dashboard</a>
+                <a href="<?php echo htmlspecialchars($dashboard_page_url); ?>" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Dashboard</a>
                 <a href="finance.php" class="btn btn-primary"><i class="bi bi-cash-stack" aria-hidden="true"></i>Finance Dashboard</a>
             </div>
         </header>
@@ -230,13 +270,14 @@ $conn->close();
                             <th>Scholarship</th>
                             <th>Discount</th>
                             <th>Term</th>
+                            <th>Notes</th>
                             <th>Status</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php if (empty($awards)): ?>
-                            <tr><td colspan="6" class="text-center text-muted">No scholarships found matching filters.</td></tr>
+                            <tr><td colspan="7" class="text-center text-muted">No scholarships found matching filters.</td></tr>
                         <?php else: ?>
                             <?php foreach ($awards as $a): ?>
                                 <tr>
@@ -260,6 +301,7 @@ $conn->close();
                                         </span>
                                     </td>
                                     <td><?php echo $a['academic_year'] . ' Sem ' . $a['semester']; ?></td>
+                                    <td class="notes-cell"><?php echo htmlspecialchars(trim((string)($a['notes'] ?? '')) !== '' ? $a['notes'] : '-'); ?></td>
                                     <td>
                                         <span class="status-<?php echo strtolower($a['status']); ?>">
                                             <?php echo $a['status']; ?>
@@ -299,7 +341,11 @@ $conn->close();
                             <select name="student_id" id="student_id" class="form-control" required>
                                 <option value="">-- Select Student --</option>
                                 <?php foreach ($students as $st): ?>
-                                    <option value="<?php echo $st['student_id']; ?>" data-semester="<?php echo $st['current_semester']; ?>">
+                                    <option
+                                        value="<?php echo $st['student_id']; ?>"
+                                        data-academic-year="<?php echo htmlspecialchars($st['term_academic_year']); ?>"
+                                        data-semester="<?php echo intval($st['term_semester']); ?>"
+                                    >
                                         <?php echo htmlspecialchars($st['last_name'] . ', ' . $st['first_name'] . ' (' . $st['student_number'] . ')'); ?>
                                     </option>
                                 <?php endforeach; ?>
@@ -327,8 +373,9 @@ $conn->close();
                         <div class="form-group">
                             <label for="semester">Semester *</label>
                             <select name="semester" id="semester" class="form-control" required>
-                                <option value="1">1st Semester</option>
-                                <option value="2">2nd Semester</option>
+                                <option value="0" <?php echo $current_sem === 0 ? 'selected' : ''; ?>>Summer Term</option>
+                                <option value="1" <?php echo $current_sem === 1 ? 'selected' : ''; ?>>1st Semester</option>
+                                <option value="2" <?php echo $current_sem === 2 ? 'selected' : ''; ?>>2nd Semester</option>
                             </select>
                         </div>
                     </div>
@@ -404,13 +451,22 @@ $conn->close();
         function autofillStudentTerm() {
             const studentSelect = document.getElementById('student_id');
             const selectedOption = studentSelect.options[studentSelect.selectedIndex];
+            const academicYearInput = document.getElementById('academic_year');
             const semesterSelect = document.getElementById('semester');
             
             if (selectedOption && selectedOption.value) {
-                // Get student's current semester from data attribute
+                const studentAcademicYear = selectedOption.getAttribute('data-academic-year');
                 const semester = selectedOption.getAttribute('data-semester');
+
+                if (academicYearInput && studentAcademicYear) {
+                    academicYearInput.value = studentAcademicYear;
+                }
+
                 if (semester) {
-                    semesterSelect.value = semester;
+                    const semesterOption = semesterSelect.querySelector(`option[value="${semester}"]`);
+                    if (semesterOption) {
+                        semesterSelect.value = semester;
+                    }
                 }
             }
         }
@@ -432,6 +488,29 @@ $conn->close();
             if (studentSelect) {
                 studentSelect.addEventListener('change', autofillStudentTerm);
             }
+
+            document.addEventListener('submit', (event) => {
+                const form = event.target.closest('form[method="post"], form[method="POST"]');
+                if (!form) {
+                    return;
+                }
+
+                if (form.dataset.submitting === '1') {
+                    event.preventDefault();
+                    return;
+                }
+
+                form.dataset.submitting = '1';
+                const submitter = event.submitter || form.querySelector('button[type="submit"], input[type="submit"]');
+                if (submitter) {
+                    submitter.disabled = true;
+                    if (submitter.tagName === 'BUTTON') {
+                        submitter.textContent = 'Processing...';
+                    } else {
+                        submitter.value = 'Processing...';
+                    }
+                }
+            });
         });
     </script>
 

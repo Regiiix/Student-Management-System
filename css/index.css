@@ -901,6 +901,66 @@ header .search-input:focus {
     color: var(--status-error);
 }
 
+.row-action-success {
+    color: var(--status-success);
+}
+
+.row-action-success:hover {
+    background: rgba(21, 122, 95, 0.12);
+    color: var(--status-success);
+}
+
+.promote-failure-modal .modal-title {
+    color: var(--status-error);
+}
+
+#confirmModal .modal-body #modalMessage {
+    margin-bottom: 10px;
+    line-height: 1.45;
+}
+
+#confirmModal .modal-details {
+    margin-top: 8px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(15, 109, 106, 0.22);
+    background: rgba(15, 109, 106, 0.07);
+}
+
+#confirmModal .modal-details.hidden {
+    display: none;
+}
+
+#confirmModal .modal-details-label {
+    margin: 0 0 6px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--primary-strong);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+#confirmModal .modal-details-list {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--text-main);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+#confirmModal .modal-details-list li + li {
+    margin-top: 4px;
+}
+
+#confirmModal .modal-details-list .modal-detail-current {
+    color: var(--text-secondary);
+}
+
+#confirmModal .modal-details-list .modal-detail-target {
+    color: var(--status-success);
+    font-weight: 700;
+}
+
 @media (max-width: 1320px) {
     .filter-toolbar-students {
         flex-wrap: wrap;
@@ -1412,8 +1472,8 @@ body.page-landing .landing-lane-card .btn {
 body.page-landing .landing-card {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    min-height: 200px;
+    gap: 8px;
+    min-height: 140px;
     text-decoration: none;
     color: var(--text-main);
     border: 1px solid rgba(197, 215, 210, 0.88);

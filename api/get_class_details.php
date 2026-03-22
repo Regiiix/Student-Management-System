@@ -1,6 +1,9 @@
 <?php
 require_once __DIR__ . '/../config/db_helpers.php';
 require_once __DIR__ . '/../config/api_response_helpers.php';
+require_once __DIR__ . '/../config/api_auth_helpers.php';
+
+api_auth_require_valid_token();
 
 // Release session lock to avoid serializing concurrent API calls.
 if (session_status() === PHP_SESSION_ACTIVE) {

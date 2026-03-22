@@ -156,6 +156,23 @@ function db_delete_json_cache($cacheKey) {
 }
 
 /**
+ * Get the calendar-based academic year start (e.g. 2026).
+ * @return int
+ */
+function db_get_calendar_academic_year_start() {
+    return intval(date('Y'));
+}
+
+/**
+ * Get the calendar-based academic year string (e.g. 2026-2027).
+ * @return string
+ */
+function db_get_calendar_academic_year() {
+    $start = db_get_calendar_academic_year_start();
+    return $start . '-' . ($start + 1);
+}
+
+/**
  * Get all programs with request + file cache.
  * @param mysqli $conn Database connection
  * @param bool $forceRefresh Force refresh from database
@@ -223,6 +240,32 @@ function getSystemSettings($conn, $keys = null, $forceRefresh = false) {
             }
         }
 
+        db_write_json_cache($cacheKey, $settings);
+    }
+
+    // Enforce global AY as calendar-year based across the app.
+    $calendarAcademicYear = db_get_calendar_academic_year();
+    $storedAcademicYear = isset($settings['current_academic_year']) ? (string)$settings['current_academic_year'] : '';
+    if ($storedAcademicYear !== $calendarAcademicYear) {
+        $upsertSql = "INSERT INTO system_settings (setting_key, setting_value, description, updated_at)
+                      VALUES (?, ?, ?, NOW())
+                      ON DUPLICATE KEY UPDATE
+                        setting_value = VALUES(setting_value),
+                        description = COALESCE(NULLIF(description, ''), VALUES(description)),
+                        updated_at = NOW()";
+
+        $upsertResult = db_query(
+            $conn,
+            $upsertSql,
+            'sss',
+            ['current_academic_year', $calendarAcademicYear, 'The currently active academic year for enrollment']
+        );
+
+        if ($upsertResult === false) {
+            logError('Failed to sync current_academic_year to calendar year in getSystemSettings', 'WARNING');
+        }
+
+        $settings['current_academic_year'] = $calendarAcademicYear;
         db_write_json_cache($cacheKey, $settings);
     }
 

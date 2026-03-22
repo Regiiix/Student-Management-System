@@ -1,13 +1,47 @@
 <?php
 require_once '../config/db_helpers.php';
+require_once '../config/csrf_helpers.php';
 
 $conn = getDBConnection();
 $message = '';
 $message_type = '';
+$csrf_scope = 'add_student';
+csrf_ensure_session();
+
+$submission_token_key = 'add_student_submission_tokens';
+$submission_token_ttl_seconds = 3600;
+if (!isset($_SESSION[$submission_token_key]) || !is_array($_SESSION[$submission_token_key])) {
+    $_SESSION[$submission_token_key] = [];
+}
+
+$submission_now = time();
+foreach ($_SESSION[$submission_token_key] as $token_value => $token_created_at) {
+    if (!is_int($token_created_at) || ($submission_now - $token_created_at) > $submission_token_ttl_seconds) {
+        unset($_SESSION[$submission_token_key][$token_value]);
+    }
+}
+
+try {
+    $add_student_submission_token = bin2hex(random_bytes(16));
+} catch (Exception $e) {
+    $add_student_submission_token = hash('sha256', uniqid('add_student_', true));
+}
+$_SESSION[$submission_token_key][$add_student_submission_token] = $submission_now;
+
+$first_name = '';
+$middle_name = '';
+$last_name = '';
+$email = '';
+$date_of_birth = '';
+$gender = '';
+$address = '';
+$phone = '';
+$year_level = 1;
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $first_name = trim($_POST['first_name'] ?? '');
+    $middle_name = trim($_POST['middle_name'] ?? '');
     $last_name = trim($_POST['last_name'] ?? '');
     $email = trim($_POST['email'] ?? '');
     $date_of_birth = $_POST['date_of_birth'] ?? '';
@@ -15,79 +49,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $address = trim($_POST['address'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
     $year_level = intval($_POST['year_level'] ?? 1);
-    $enroll_semester = intval($_POST['enroll_semester'] ?? 1);
-    
-    // Validation
-    $errors = [];
-    if (empty($first_name)) $errors[] = 'First name is required';
-    if (empty($last_name)) $errors[] = 'Last name is required';
-    if (empty($email)) $errors[] = 'Email is required';
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'Invalid email format';
-    if (empty($date_of_birth)) $errors[] = 'Date of birth is required';
-    if (empty($gender)) $errors[] = 'Gender is required';
-    if ($year_level < 1 || $year_level > 4) $errors[] = 'Invalid year level';
-    if ($enroll_semester < 1 || $enroll_semester > 2) $errors[] = 'Invalid semester';
-    
-    // Check for duplicate email
-    if (empty($errors)) {
-        $check_email = db_query($conn, "SELECT student_id FROM students WHERE email = ?", 's', [$email]);
-        if ($check_email && $check_email->num_rows > 0) {
-            $errors[] = 'Email already exists';
-        }
-    }
-    
-    if (empty($errors)) {
-        // Start transaction
-        $conn->begin_transaction();
-        
-        try {
-            // Generate student number (format: YYYY-XXXXX) using MAX to prevent reuse/duplicates
-            $year_prefix = date('Y');
-            $max_result = db_query($conn, "SELECT student_number FROM students WHERE student_number LIKE ? ORDER BY student_number DESC LIMIT 1", 's', [$year_prefix . '%']);
-            $max_row = db_fetch_one($max_result);
-            
-            if ($max_row && isset($max_row['student_number'])) {
-                // Extract the sequence number
-                $parts = explode('-', $max_row['student_number']);
-                $last_seq = intval(end($parts));
-                $new_seq = $last_seq + 1;
-            } else {
-                $new_seq = 1;
-            }
-            
-            $student_number = $year_prefix . '-' . str_pad($new_seq, 5, '0', STR_PAD_LEFT);
-            
-            // Insert student (middle_name is optional)
-            $middle_name = trim($_POST['middle_name'] ?? '');
-            $insert_sql = "INSERT INTO students (student_number, first_name, middle_name, last_name, email, date_of_birth, gender, address, phone, year_level, current_semester, status) 
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active')";
-            $stmt = $conn->prepare($insert_sql);
-            if (!$stmt) {
-                throw new Exception("Prepare failed: " . $conn->error);
-            }
-            $stmt->bind_param('ssssssssiii', $student_number, $first_name, $middle_name, $last_name, $email, $date_of_birth, $gender, $address, $phone, $year_level, $enroll_semester);
-            $stmt->execute();
-            $new_student_id = $conn->insert_id;
-            $stmt->close();
-            
-            $conn->commit();
-            
-            // Redirect to index with success message for modal
-            $conn->close();
-            $redirect_url = '../index.php?msg=added&name=' . urlencode($first_name . ' ' . $last_name) 
-                          . '&student_number=' . urlencode($student_number)
-                          . '&student_id=' . $new_student_id;
-            header('Location: ' . $redirect_url);
-            exit;
-            
-        } catch (Exception $e) {
-            $conn->rollback();
-            $message = 'Error adding student: ' . $e->getMessage();
-            $message_type = 'error';
-        }
-    } else {
-        $message = implode('<br>', $errors);
+
+    $submitted_submission_token = trim((string)($_POST['submission_token'] ?? ''));
+    if ($submitted_submission_token === '' || !isset($_SESSION[$submission_token_key][$submitted_submission_token])) {
+        $message = 'This add-student request was already submitted or expired. Please try again.';
         $message_type = 'error';
+    } else {
+        unset($_SESSION[$submission_token_key][$submitted_submission_token]);
+
+        if (!csrf_validate_request_token($csrf_scope, 'csrf_token', false)) {
+            $message = 'Invalid or expired security token. Please refresh and try again.';
+            $message_type = 'error';
+        } else {
+            // Validation
+            $errors = [];
+            if (empty($first_name)) $errors[] = 'First name is required';
+            if (empty($last_name)) $errors[] = 'Last name is required';
+            if (empty($email)) $errors[] = 'Email is required';
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'Invalid email format';
+            if (empty($date_of_birth)) $errors[] = 'Date of birth is required';
+            if (empty($gender)) $errors[] = 'Gender is required';
+            if ($year_level < 1 || $year_level > 4) $errors[] = 'Invalid year level';
+
+            // Check for duplicate email
+            if (empty($errors)) {
+                $check_email = db_query($conn, "SELECT student_id FROM students WHERE email = ?", 's', [$email]);
+                if ($check_email && $check_email->num_rows > 0) {
+                    $errors[] = 'Email already exists';
+                }
+            }
+
+            if (empty($errors)) {
+                // Start transaction
+                if (!$conn->begin_transaction()) {
+                    $message = 'Unable to start create transaction. Please try again.';
+                    $message_type = 'error';
+                } else {
+                    try {
+                        // Generate student number (format: YYYY-XXXXX) using MAX to prevent reuse/duplicates
+                        $year_prefix = date('Y');
+                        $max_result = db_query($conn, "SELECT student_number FROM students WHERE student_number LIKE ? ORDER BY student_number DESC LIMIT 1", 's', [$year_prefix . '%']);
+                        $max_row = db_fetch_one($max_result);
+
+                        if ($max_row && isset($max_row['student_number'])) {
+                            // Extract the sequence number
+                            $parts = explode('-', $max_row['student_number']);
+                            $last_seq = intval(end($parts));
+                            $new_seq = $last_seq + 1;
+                        } else {
+                            $new_seq = 1;
+                        }
+
+                        $student_number = $year_prefix . '-' . str_pad($new_seq, 5, '0', STR_PAD_LEFT);
+
+                        // Insert student
+                        $insert_sql = "INSERT INTO students (student_number, first_name, middle_name, last_name, email, date_of_birth, gender, address, phone, year_level, status)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active')";
+                        $stmt = $conn->prepare($insert_sql);
+                        if (!$stmt) {
+                            throw new Exception('Prepare failed: ' . $conn->error);
+                        }
+
+                        $stmt->bind_param('sssssssssi', $student_number, $first_name, $middle_name, $last_name, $email, $date_of_birth, $gender, $address, $phone, $year_level);
+                        if (!$stmt->execute()) {
+                            $stmt_error = $stmt->error;
+                            $stmt->close();
+                            throw new Exception('Insert failed: ' . $stmt_error);
+                        }
+                        $new_student_id = $conn->insert_id;
+                        $stmt->close();
+
+                        $conn->commit();
+
+                        // Redirect to index with success message for modal
+                        $conn->close();
+                        $redirect_url = '../index.php?msg=added&name=' . urlencode($first_name . ' ' . $last_name)
+                                      . '&student_number=' . urlencode($student_number)
+                                      . '&student_id=' . $new_student_id;
+                        header('Location: ' . $redirect_url);
+                        exit;
+
+                    } catch (Exception $e) {
+                        $conn->rollback();
+                        $message = 'Error adding student: ' . $e->getMessage();
+                        $message_type = 'error';
+                    }
+                }
+            } else {
+                $message = implode('<br>', $errors);
+                $message_type = 'error';
+            }
+        }
     }
 }
 
@@ -111,9 +163,6 @@ $conn->close();
     <div class="container">
         <header>
             <h1>Add New Student</h1>
-            <div class="header-actions">
-                <a href="../index.php" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Student List</a>
-            </div>
         </header>
 
         <?php if ($message): ?>
@@ -124,6 +173,8 @@ $conn->close();
 
         <div class="student-details">
             <form method="post" class="add-student-form">
+                <?php echo csrf_token_field($csrf_scope); ?>
+                <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($add_student_submission_token); ?>">
                 <!-- Personal Information -->
                 <div class="form-section">
                     <h3>Personal Information</h3>
@@ -184,18 +235,11 @@ $conn->close();
                                 <option value="4" <?php echo ($year_level ?? 1) == 4 ? 'selected' : ''; ?>>4th Year</option>
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label for="enroll_semester">Current Semester <span class="required">*</span></label>
-                            <select id="enroll_semester" name="enroll_semester" required>
-                                <option value="1" <?php echo ($enroll_semester ?? 1) == 1 ? 'selected' : ''; ?>>1st Semester</option>
-                                <option value="2" <?php echo ($enroll_semester ?? 1) == 2 ? 'selected' : ''; ?>>2nd Semester</option>
-                            </select>
-                        </div>
                     </div>
                 </div>
 
                 <div class="form-actions">
-                    <a href="../index.php" class="btn btn-back">Cancel</a>
+                    <a href="../index.php?view=students" class="btn btn-back">Cancel</a>
                     <button type="submit" class="btn btn-add">Add Student</button>
                 </div>
             </form>
@@ -217,10 +261,29 @@ $conn->close();
 
         const addStudentForm = document.querySelector('.add-student-form');
         if (addStudentForm) {
-            addStudentForm.addEventListener('submit', function() {
-                if (addStudentForm.checkValidity()) {
-                    showSpinner();
+            addStudentForm.addEventListener('submit', function(event) {
+                if (addStudentForm.dataset.submitting === '1') {
+                    event.preventDefault();
+                    return;
                 }
+
+                if (!addStudentForm.checkValidity()) {
+                    return;
+                }
+
+                addStudentForm.dataset.submitting = '1';
+
+                const submitter = event.submitter || addStudentForm.querySelector('button[type="submit"], input[type="submit"]');
+                if (submitter) {
+                    submitter.disabled = true;
+                    if (submitter.tagName === 'BUTTON') {
+                        submitter.textContent = 'Adding...';
+                    } else {
+                        submitter.value = 'Adding...';
+                    }
+                }
+
+                showSpinner();
             });
         }
     </script>

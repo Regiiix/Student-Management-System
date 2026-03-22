@@ -912,6 +912,16 @@ body.page-scholarships .stats-grid {
         body.page-scholarships .scholarship-table tr:hover {
             background: #f8f9fa;
         }
+
+        body.page-scholarships .scholarship-table .notes-cell {
+            min-width: 260px;
+            max-width: 420px;
+            white-space: normal;
+            word-break: break-word;
+            line-height: 1.35;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
         
         body.page-scholarships .status-active { background: #d4edda; color: #155724; padding: 3px 8px; border-radius: 4px; }
         body.page-scholarships .status-revoked { background: #f8d7da; color: #721c24; padding: 3px 8px; border-radius: 4px; }

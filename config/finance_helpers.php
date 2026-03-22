@@ -198,7 +198,7 @@ function getStudentBalancesBatch($conn, $student_program_map) {
 
     // Aggregate all enrolled units per student per term.
     $student_placeholders = implode(',', array_fill(0, count($student_ids), '?'));
-    $included_statuses = ['Enrolled', 'Passed', 'Failed', 'Dropped'];
+    $included_statuses = ['Enrolled', 'Passed', 'Failed'];
     $status_placeholders = implode(',', array_fill(0, count($included_statuses), '?'));
     $term_types = str_repeat('i', count($student_ids)) . str_repeat('s', count($included_statuses));
     $term_params = array_merge($student_ids, $included_statuses);
@@ -227,7 +227,17 @@ function getStudentBalancesBatch($conn, $student_program_map) {
 
             $term_tuition = $units * $rates['tuition_per_unit'];
             $term_misc = $fixed_fees_excluding_lab + $rates['lab_fee'];
-            $assessment_by_student[$sid] += ($term_tuition + $term_misc);
+            $term_scholarship = calculateScholarshipDiscount(
+                $conn,
+                $sid,
+                (string)$row['academic_year'],
+                intval($row['semester']),
+                $term_tuition,
+                $term_misc
+            );
+            $term_discount = floatval($term_scholarship['total_discount'] ?? 0);
+
+            $assessment_by_student[$sid] += (($term_tuition + $term_misc) - $term_discount);
         }
     }
 
@@ -463,7 +473,7 @@ function getStudentBalance($conn, $student_id) {
                 FROM enrollments e 
                 JOIN curriculum c ON e.curriculum_id = c.curriculum_id 
                 WHERE e.student_id = ? 
-                AND e.status IN ('Enrolled', 'Passed', 'Failed', 'Dropped')";
+                AND e.status IN ('Enrolled', 'Passed', 'Failed')";
                 
     $terms_res = db_query($conn, $sem_sql, 'i', [$student_id]);
     $terms = $terms_res ? db_fetch_all($terms_res) : [];
@@ -479,7 +489,7 @@ function getStudentBalance($conn, $student_id) {
                   FROM enrollments e 
                   JOIN curriculum c ON e.curriculum_id = c.curriculum_id 
                   WHERE e.student_id = ? AND e.academic_year = ? AND c.semester = ? 
-                  AND e.status IN ('Enrolled', 'Passed', 'Failed', 'Dropped')";
+                  AND e.status IN ('Enrolled', 'Passed', 'Failed')";
                   
         $units_row = db_fetch_one(db_query($conn, $u_sql, 'isi', [$student_id, $ay, $sem]));
         $units = $units_row ? floatval($units_row['total_units']) : 0;
@@ -501,8 +511,8 @@ function getStudentBalance($conn, $student_id) {
 }
 
 /**
- * Calculate the assessment for a specific term.
- * Now uses program-specific tuition rates.
+ * Calculate the net assessment for a specific term (after scholarship discounts).
+ * Uses program-specific tuition rates.
  */
 function getTermAssessment($conn, $student_id, $ay, $sem) {
     // Get student's program for tuition rate
@@ -525,13 +535,18 @@ function getTermAssessment($conn, $student_id, $ay, $sem) {
               FROM enrollments e 
               JOIN curriculum c ON e.curriculum_id = c.curriculum_id 
               WHERE e.student_id = ? AND e.academic_year = ? AND c.semester = ? 
-              AND e.status IN ('Enrolled', 'Passed', 'Failed', 'Dropped')";
+              AND e.status IN ('Enrolled', 'Passed', 'Failed')";
               
     $units_row = db_fetch_one(db_query($conn, $u_sql, 'isi', [$student_id, $ay, $sem]));
     $units = $units_row ? floatval($units_row['total_units']) : 0;
     
     if ($units > 0) {
-        return ($units * $tuition_rate) + $total_fixed_fee;
+        $tuition_amount = $units * $tuition_rate;
+        $gross_assessment = $tuition_amount + $total_fixed_fee;
+        $scholarship_data = calculateScholarshipDiscount($conn, $student_id, $ay, $sem, $tuition_amount, $total_fixed_fee);
+        $total_discount = floatval($scholarship_data['total_discount'] ?? 0);
+
+        return $gross_assessment - $total_discount;
     }
     return 0;
 }
@@ -553,7 +568,25 @@ function getTermBalance($conn, $student_id, $ay, $sem) {
     $credit_row = db_fetch_one(db_query($conn, $credit_sql, 'isi', [$student_id, $ay, $sem]));
     $applied_credit = $credit_row && $credit_row['applied_credit'] ? floatval($credit_row['applied_credit']) : 0;
 
-    return $assessment - $total_paid - $applied_credit;
+    $raw_balance = $assessment - $total_paid - $applied_credit;
+    if ($raw_balance <= 0) {
+        return $raw_balance;
+    }
+
+    // Also consider unapplied credits from earlier terms for consistency with carry-forward views.
+    $available_credit_sql = "SELECT SUM(amount) AS available_credit
+                             FROM term_overpayments
+                             WHERE student_id = ?
+                               AND is_applied = 0
+                               AND NOT (source_academic_year = ? AND source_semester = ?)";
+    $available_credit_row = db_fetch_one(db_query($conn, $available_credit_sql, 'isi', [$student_id, $ay, $sem]));
+    $available_credit = $available_credit_row && $available_credit_row['available_credit']
+        ? floatval($available_credit_row['available_credit'])
+        : 0;
+
+    $auto_credit = min($available_credit, $raw_balance);
+
+    return $raw_balance - $auto_credit;
 }
 
 /**
@@ -655,6 +688,254 @@ function getAllScholarships($conn, $active_only = true) {
 }
 
 /**
+ * Ensure required merit scholarship definitions exist in scholarships table.
+ *
+ * @param mysqli $conn Database connection
+ * @return array Map of scholarship code => scholarship_id
+ */
+function ensurePromotionMeritScholarships($conn) {
+    $definitions = [
+        [
+            'code' => 'MERIT_75',
+            'name' => 'Merit Scholarship 75%',
+            'description' => 'Auto-awarded on promotion when all passed final grades in source term are 1.25 or better.',
+            'discount' => 75.00
+        ],
+        [
+            'code' => 'MERIT_25',
+            'name' => 'Merit Scholarship 25%',
+            'description' => 'Auto-awarded on promotion when best final grade is 1.75 or better and no passed final grade is 2.00 or higher.',
+            'discount' => 25.00
+        ],
+        [
+            'code' => 'MERIT_50',
+            'name' => 'Merit Scholarship 50%',
+            'description' => 'Auto-awarded on promotion when all passed final grades in source term are 1.50 or better.',
+            'discount' => 50.00
+        ]
+    ];
+
+    $ids = [];
+    foreach ($definitions as $def) {
+        $upsert_sql = "INSERT INTO scholarships
+                       (code, name, description, discount_type, discount_value, applies_to, is_active)
+                       VALUES (?, ?, ?, 'percentage', ?, 'tuition', 1)
+                       ON DUPLICATE KEY UPDATE
+                           name = VALUES(name),
+                           description = VALUES(description),
+                           discount_type = 'percentage',
+                           discount_value = VALUES(discount_value),
+                           applies_to = 'tuition',
+                           is_active = 1,
+                           updated_at = NOW()";
+        if (db_query($conn, $upsert_sql, 'sssd', [$def['code'], $def['name'], $def['description'], $def['discount']]) === false) {
+            return [];
+        }
+
+        $id_row = db_fetch_one(db_query($conn, "SELECT scholarship_id FROM scholarships WHERE code = ? LIMIT 1", 's', [$def['code']]));
+        if (!$id_row) {
+            return [];
+        }
+
+        $ids[$def['code']] = intval($id_row['scholarship_id']);
+    }
+
+    return $ids;
+}
+
+/**
+ * Apply auto merit scholarship for target term based on best final grade in source term.
+ *
+ * Rules:
+ * - min grade <= 1.25 AND max grade <= 1.25 => 75% tuition scholarship
+ * - min grade <= 1.50 AND max grade <= 1.50 => 50% tuition scholarship
+ * - min grade <= 1.75 AND max grade < 2.00 => 25% tuition scholarship
+ *
+ * @param mysqli $conn Database connection
+ * @param int $student_id Student ID
+ * @param string $source_ay Source academic year
+ * @param int $source_sem Source semester
+ * @param string $target_ay Target academic year
+ * @param int $target_sem Target semester
+ * @return array ['success'=>bool, 'applied'=>bool, 'scholarship_name'=>string, 'best_grade'=>float|null, 'highest_grade'=>float|null, 'reason'=>string]
+ */
+function applyPromotionMeritScholarship($conn, $student_id, $source_ay, $source_sem, $target_ay, $target_sem) {
+    $student_id = intval($student_id);
+    $source_sem = intval($source_sem);
+    $target_sem = intval($target_sem);
+    $source_ay = trim((string)$source_ay);
+    $target_ay = trim((string)$target_ay);
+
+    if ($student_id <= 0 || $source_ay === '' || $target_ay === '' || $source_sem <= 0 || $target_sem <= 0) {
+        return ['success' => false, 'applied' => false, 'scholarship_name' => '', 'best_grade' => null, 'highest_grade' => null, 'reason' => 'Invalid merit scholarship parameters.'];
+    }
+
+    $ids = ensurePromotionMeritScholarships($conn);
+    if (empty($ids['MERIT_25']) || empty($ids['MERIT_50']) || empty($ids['MERIT_75'])) {
+        return ['success' => false, 'applied' => false, 'scholarship_name' => '', 'best_grade' => null, 'highest_grade' => null, 'reason' => 'Unable to initialize merit scholarship definitions.'];
+    }
+
+    $grade_sql = "SELECT MIN(e.final_grade) AS best_grade,
+                         MAX(e.final_grade) AS highest_grade
+                  FROM enrollments e
+                  JOIN curriculum c ON e.curriculum_id = c.curriculum_id
+                  WHERE e.student_id = ?
+                    AND e.academic_year = ?
+                    AND c.semester = ?
+                    AND e.final_grade IS NOT NULL
+                    AND e.final_grade > 0
+                    AND e.status = 'Passed'";
+    $grade_row = db_fetch_one(db_query($conn, $grade_sql, 'isi', [$student_id, $source_ay, $source_sem]));
+    $best_grade = isset($grade_row['best_grade']) ? floatval($grade_row['best_grade']) : 0;
+    $highest_grade = isset($grade_row['highest_grade']) ? floatval($grade_row['highest_grade']) : 0;
+
+    if ($best_grade <= 0) {
+        return ['success' => true, 'applied' => false, 'scholarship_name' => '', 'best_grade' => null, 'highest_grade' => null, 'reason' => 'No finalized passed grades found in source term.'];
+    }
+
+    $chosen_code = '';
+    $chosen_name = '';
+    if ($best_grade <= 1.25 && $highest_grade <= 1.25) {
+        $chosen_code = 'MERIT_75';
+        $chosen_name = 'Merit Scholarship 75%';
+    } elseif ($best_grade <= 1.50 && $highest_grade <= 1.50) {
+        $chosen_code = 'MERIT_50';
+        $chosen_name = 'Merit Scholarship 50%';
+    } elseif ($best_grade <= 1.75 && $highest_grade < 2.00) {
+        $chosen_code = 'MERIT_25';
+        $chosen_name = 'Merit Scholarship 25%';
+    }
+
+    if ($chosen_code === '') {
+        $reason = 'Lowest passed grade is ' . number_format($best_grade, 2) . ', which is above the 1.75 merit limit.';
+
+        if ($best_grade <= 1.25 && $highest_grade > 1.25) {
+            $reason = '75% not qualified: found passed grade ' . number_format($highest_grade, 2) . ' higher than 1.25.';
+        } elseif ($best_grade <= 1.50 && $highest_grade > 1.50) {
+            $reason = '50% not qualified: found passed grade ' . number_format($highest_grade, 2) . ' higher than 1.50.';
+        } elseif ($best_grade <= 1.75 && $highest_grade >= 2.00) {
+            $reason = '25% not qualified: found passed grade ' . number_format($highest_grade, 2) . ' at or above 2.00.';
+        }
+
+        return ['success' => true, 'applied' => false, 'scholarship_name' => '', 'best_grade' => $best_grade, 'highest_grade' => $highest_grade, 'reason' => $reason];
+    }
+
+    $revoke_sql = "UPDATE student_scholarships ss
+                   JOIN scholarships s ON ss.scholarship_id = s.scholarship_id
+                   SET ss.status = 'Revoked', ss.updated_at = NOW()
+                   WHERE ss.student_id = ?
+                     AND ss.status = 'Active'
+                                         AND (ss.academic_year <> ? OR ss.semester <> ?)
+                     AND s.code IN ('MERIT_25', 'MERIT_50', 'MERIT_75')";
+    if (db_query($conn, $revoke_sql, 'isi', [$student_id, $target_ay, $target_sem]) === false) {
+        return ['success' => false, 'applied' => false, 'scholarship_name' => '', 'best_grade' => $best_grade, 'highest_grade' => $highest_grade, 'reason' => 'Unable to clear existing merit scholarships for target term.'];
+    }
+
+    $award_note = 'Auto-awarded from promotion ('
+        . $source_ay . ' Sem ' . intval($source_sem)
+        . ') based on passed grades: lowest '
+        . number_format($best_grade, 2)
+        . ', highest '
+        . number_format($highest_grade, 2);
+    $upsert_award_sql = "INSERT INTO student_scholarships
+                         (student_id, scholarship_id, academic_year, semester, status, awarded_date, notes)
+                         VALUES (?, ?, ?, ?, 'Active', CURDATE(), ?)
+                         ON DUPLICATE KEY UPDATE
+                            status = 'Active',
+                            awarded_date = CURDATE(),
+                            notes = VALUES(notes),
+                            updated_at = NOW()";
+    if (db_query($conn, $upsert_award_sql, 'iisis', [$student_id, $ids[$chosen_code], $target_ay, $target_sem, $award_note]) === false) {
+        return ['success' => false, 'applied' => false, 'scholarship_name' => '', 'best_grade' => $best_grade, 'highest_grade' => $highest_grade, 'reason' => 'Unable to award merit scholarship for target term.'];
+    }
+
+    return ['success' => true, 'applied' => true, 'scholarship_name' => $chosen_name, 'best_grade' => $best_grade, 'highest_grade' => $highest_grade, 'reason' => ''];
+}
+
+/**
+ * Resolve fallback merit discount percent for a term when no explicit merit award exists yet.
+ * Mirrors promotion merit thresholds using previous-term passed grades.
+ *
+ * @param mysqli $conn Database connection
+ * @param int $student_id Student ID
+ * @param string $target_ay Target academic year
+ * @param int $target_sem Target semester
+ * @return float Discount percent (0, 25, 50, 75)
+ */
+function getFallbackPromotionMeritDiscountPercent($conn, $student_id, $target_ay, $target_sem) {
+    $student_id = intval($student_id);
+    $target_ay = trim((string)$target_ay);
+    $target_sem = intval($target_sem);
+
+    if ($student_id <= 0 || $target_ay === '' || ($target_sem !== 1 && $target_sem !== 2)) {
+        return 0.0;
+    }
+
+    $existing_merit_sql = "SELECT 1
+                           FROM student_scholarships ss
+                           JOIN scholarships s ON ss.scholarship_id = s.scholarship_id
+                           WHERE ss.student_id = ?
+                             AND ss.academic_year = ?
+                             AND ss.semester = ?
+                             AND ss.status = 'Active'
+                             AND s.code IN ('MERIT_25', 'MERIT_50', 'MERIT_75')
+                           LIMIT 1";
+    $existing_merit = db_fetch_one(db_query($conn, $existing_merit_sql, 'isi', [$student_id, $target_ay, $target_sem]));
+    if ($existing_merit) {
+        return 0.0;
+    }
+
+    $source_ay = '';
+    $source_sem = 0;
+
+    if ($target_sem === 2) {
+        $source_ay = $target_ay;
+        $source_sem = 1;
+    } else {
+        if (preg_match('/^(\d{4})-(\d{4})$/', $target_ay, $matches)) {
+            $start_year = intval($matches[1]) - 1;
+            $end_year = intval($matches[2]) - 1;
+            $source_ay = $start_year . '-' . $end_year;
+        }
+        $source_sem = 2;
+    }
+
+    if ($source_ay === '' || $source_sem <= 0) {
+        return 0.0;
+    }
+
+    $grade_sql = "SELECT MIN(e.final_grade) AS best_grade,
+                         MAX(e.final_grade) AS highest_grade
+                  FROM enrollments e
+                  JOIN curriculum c ON e.curriculum_id = c.curriculum_id
+                  WHERE e.student_id = ?
+                    AND e.academic_year = ?
+                    AND c.semester = ?
+                    AND e.final_grade IS NOT NULL
+                    AND e.final_grade > 0
+                    AND e.status = 'Passed'";
+    $grade_row = db_fetch_one(db_query($conn, $grade_sql, 'isi', [$student_id, $source_ay, $source_sem]));
+    $best_grade = isset($grade_row['best_grade']) ? floatval($grade_row['best_grade']) : 0.0;
+    $highest_grade = isset($grade_row['highest_grade']) ? floatval($grade_row['highest_grade']) : 0.0;
+
+    if ($best_grade <= 0) {
+        return 0.0;
+    }
+
+    if ($best_grade <= 1.25 && $highest_grade <= 1.25) {
+        return 75.0;
+    }
+    if ($best_grade <= 1.50 && $highest_grade <= 1.50) {
+        return 50.0;
+    }
+    if ($best_grade <= 1.75 && $highest_grade < 2.00) {
+        return 25.0;
+    }
+
+    return 0.0;
+}
+
+/**
  * Get scholarships for a student in a specific term
  * @param mysqli $conn Database connection
  * @param int $student_id Student ID
@@ -735,10 +1016,32 @@ function calculateScholarshipDiscount($conn, $student_id, $ay, $sem, $tuition_am
             'type' => $s['discount_type'],
             'value' => $s['discount_value'],
             'applies_to' => $s['applies_to'],
-            'discount_amount' => $discount
+            'discount_amount' => $discount,
+            'notes' => trim((string)($s['notes'] ?? '')),
+            'awarded_date' => $s['awarded_date'] ?? null
         ];
         
         $total_discount += $discount;
+    }
+
+    // Safety fallback: if no explicit scholarship row exists for the term,
+    // derive merit discount from previous-term grades and expose it in UI output.
+    if ($total_discount <= 0) {
+        $fallback_percent = getFallbackPromotionMeritDiscountPercent($conn, $student_id, $ay, intval($sem));
+        if ($fallback_percent > 0) {
+            $fallback_discount = round($tuition_amount * ($fallback_percent / 100), 2);
+            $discounts[] = [
+                'name' => 'Merit Scholarship (Auto Applied)',
+                'code' => 'MERIT_AUTO',
+                'type' => 'percentage',
+                'value' => $fallback_percent,
+                'applies_to' => 'tuition',
+                'discount_amount' => $fallback_discount,
+                'notes' => 'Derived from previous-term passed grades; no explicit scholarship row for this term yet.',
+                'awarded_date' => null
+            ];
+            $total_discount += $fallback_discount;
+        }
     }
     
     return [

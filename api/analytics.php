@@ -7,6 +7,9 @@ require_once __DIR__ . '/../config/db_helpers.php';
 require_once __DIR__ . '/../config/finance_helpers.php';
 require_once __DIR__ . '/../config/academic_helpers.php';
 require_once __DIR__ . '/../config/api_response_helpers.php';
+require_once __DIR__ . '/../config/api_auth_helpers.php';
+
+api_auth_require_valid_token();
 
 // Release PHP session lock so concurrent dashboard API requests can run in parallel.
 if (session_status() === PHP_SESSION_ACTIVE) {
@@ -195,11 +198,22 @@ function getOverviewStats($conn, $ay, $sem) {
     $stats['financials'] = getFinancialSummary($conn, $ay, $sem);
     
     // Quick stats for current term (single DB round-trip).
-    $quick_stats_sql = "SELECT
-        (SELECT COUNT(DISTINCT student_id) FROM enrollments WHERE academic_year = ? AND status = 'Enrolled') as enrolled_this_term,
-        (SELECT COUNT(*) FROM academic_standings WHERE academic_year = ? AND standing = 'Dean''s List') as deans_list,
-        (SELECT COUNT(*) FROM academic_standings WHERE academic_year = ? AND standing IN ('Probation', 'Warning')) as at_risk";
-    $quick_stats = db_fetch_one(db_query($conn, $quick_stats_sql, 'sss', [$ay, $ay, $ay])) ?: [];
+    if ($sem !== null && intval($sem) > 0) {
+        $quick_stats_sql = "SELECT
+            (SELECT COUNT(DISTINCT e.student_id)
+             FROM enrollments e
+             JOIN curriculum c ON e.curriculum_id = c.curriculum_id
+             WHERE e.academic_year = ? AND c.semester = ? AND e.status = 'Enrolled') as enrolled_this_term,
+            (SELECT COUNT(*) FROM academic_standings WHERE academic_year = ? AND semester = ? AND standing = 'Dean''s List') as deans_list,
+            (SELECT COUNT(*) FROM academic_standings WHERE academic_year = ? AND semester = ? AND standing IN ('Probation', 'Warning')) as at_risk";
+        $quick_stats = db_fetch_one(db_query($conn, $quick_stats_sql, 'sisisi', [$ay, $sem, $ay, $sem, $ay, $sem])) ?: [];
+    } else {
+        $quick_stats_sql = "SELECT
+            (SELECT COUNT(DISTINCT student_id) FROM enrollments WHERE academic_year = ? AND status = 'Enrolled') as enrolled_this_term,
+            (SELECT COUNT(*) FROM academic_standings WHERE academic_year = ? AND standing = 'Dean''s List') as deans_list,
+            (SELECT COUNT(*) FROM academic_standings WHERE academic_year = ? AND standing IN ('Probation', 'Warning')) as at_risk";
+        $quick_stats = db_fetch_one(db_query($conn, $quick_stats_sql, 'sss', [$ay, $ay, $ay])) ?: [];
+    }
     $stats['quick_stats'] = [
         'enrolled_this_term' => intval($quick_stats['enrolled_this_term'] ?? 0),
         'deans_list' => intval($quick_stats['deans_list'] ?? 0),

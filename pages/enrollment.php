@@ -9,21 +9,233 @@ $message_type = '';
 $csrf_scope = 'enrollment_management';
 csrf_ensure_session();
 
-// Current date context: February 24, 2026
-// Current academic year is 2025-2026
-$current_year = intval(date('Y')); // 2026
-$current_month = intval(date('n')); // 2 (February)
-
-// Determine the current academic year start
-// Academic years typically start in August, so if we're before August, we're still in the previous academic year
-if ($current_month >= 8) {
-    $current_academic_year_start = $current_year;
-} else {
-    $current_academic_year_start = $current_year - 1;
+/**
+ * Get the current global academic year start based on calendar year.
+ *
+ * @return int
+ */
+function getCurrentCalendarAcademicYearStart() {
+    return intval(date('Y'));
 }
 
-// Allow 3 years advance from current academic year
-$max_allowed_year_start = $current_academic_year_start + 3;
+/**
+ * Get the allowed enrollment AY window based on current calendar year.
+ *
+ * @return array
+ */
+function getEnrollmentAcademicYearWindow() {
+    $current_start = getCurrentCalendarAcademicYearStart();
+
+    return [
+        'current_start' => $current_start,
+        'min_start' => max(2000, $current_start - 1),
+        'max_start' => $current_start + 3,
+    ];
+}
+
+/**
+ * Parse YYYY-YYYY academic year string and return start year.
+ *
+ * @param string $academic_year
+ * @return int|null
+ */
+function parseAcademicYearStart($academic_year) {
+    $academic_year = trim((string)$academic_year);
+    if (!preg_match('/^(\d{4})-(\d{4})$/', $academic_year, $matches)) {
+        return null;
+    }
+
+    $start = intval($matches[1]);
+    $end = intval($matches[2]);
+    if ($end !== ($start + 1)) {
+        return null;
+    }
+
+    return $start;
+}
+
+/**
+ * Validate enrollment AY against allowed window.
+ *
+ * @param string $academic_year
+ * @param string|null $error_message
+ * @return bool
+ */
+function validateEnrollmentAcademicYearWindow($academic_year, &$error_message = null) {
+    $start_year = parseAcademicYearStart($academic_year);
+    if ($start_year === null) {
+        $error_message = 'Invalid academic year format. Expected YYYY-YYYY.';
+        return false;
+    }
+
+    $window = getEnrollmentAcademicYearWindow();
+    $min_start = intval($window['min_start']);
+    $max_start = intval($window['max_start']);
+
+    if ($start_year < $min_start || $start_year > $max_start) {
+        $error_message = 'Academic year is outside the allowed range ('
+            . $min_start . '-' . ($min_start + 1)
+            . ' to '
+            . $max_start . '-' . ($max_start + 1)
+            . ').';
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Keep global AY aligned to current calendar year.
+ *
+ * @param mysqli $conn
+ * @return void
+ */
+function ensureGlobalAcademicYearIsCurrent($conn) {
+    $window = getEnrollmentAcademicYearWindow();
+    $current_start = intval($window['current_start']);
+    $target_ay = $current_start . '-' . ($current_start + 1);
+
+    $stored_ay = (string)getSystemSetting($conn, 'current_academic_year', '', true);
+    if ($stored_ay === $target_ay) {
+        return;
+    }
+
+    $upsert_sql = "INSERT INTO system_settings (setting_key, setting_value, description, updated_at)
+                   VALUES (?, ?, ?, NOW())
+                   ON DUPLICATE KEY UPDATE
+                     setting_value = VALUES(setting_value),
+                     description = COALESCE(NULLIF(description, ''), VALUES(description)),
+                     updated_at = NOW()";
+
+    if (db_query($conn, $upsert_sql, 'sss', ['current_academic_year', $target_ay, 'The currently active academic year for enrollment'])) {
+        clearCache();
+        clearEnrollmentAnalyticsCaches();
+    }
+}
+
+$academic_year_window = getEnrollmentAcademicYearWindow();
+$current_academic_year_start = intval($academic_year_window['current_start']);
+$min_allowed_year_start = intval($academic_year_window['min_start']);
+$max_allowed_year_start = intval($academic_year_window['max_start']);
+
+ensureGlobalAcademicYearIsCurrent($conn);
+
+/**
+ * Get failed subjects that still require retake (failed with no passed attempt yet).
+ *
+ * @param mysqli $conn
+ * @param int $student_id
+ * @return array|null Returns array on success, null on query failure.
+ */
+function getPendingFailedCoursesForRetake($conn, $student_id) {
+    $student_id = intval($student_id);
+    if ($student_id <= 0) {
+        return [];
+    }
+
+    $sql = "SELECT c.curriculum_id, c.course_code, c.course_name, c.year_level, c.semester
+            FROM curriculum c
+            WHERE c.curriculum_id IN (
+                SELECT DISTINCT ef.curriculum_id
+                FROM enrollments ef
+                WHERE ef.student_id = ?
+                  AND ef.status = 'Failed'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM enrollments ep
+                      WHERE ep.student_id = ef.student_id
+                        AND ep.curriculum_id = ef.curriculum_id
+                        AND ep.status = 'Passed'
+                  )
+            )
+            ORDER BY c.course_code";
+
+    $result = db_query($conn, $sql, 'i', [$student_id]);
+    if ($result === false) {
+        return null;
+    }
+
+    return db_fetch_all($result);
+}
+
+/**
+ * Clear dashboard analytics cache files after enrollment writes.
+ *
+ * @return void
+ */
+function clearEnrollmentAnalyticsCaches() {
+    $cacheDir = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR . 'cache';
+    if (!is_dir($cacheDir)) {
+        return;
+    }
+
+    $patterns = [
+        $cacheDir . DIRECTORY_SEPARATOR . 'analytics_*.json',
+        $cacheDir . DIRECTORY_SEPARATOR . 'dashboard_stats_v1.json',
+    ];
+
+    foreach ($patterns as $pattern) {
+        $files = glob($pattern);
+        if (!is_array($files)) {
+            continue;
+        }
+
+        foreach ($files as $file) {
+            if (is_file($file)) {
+                @unlink($file);
+            }
+        }
+    }
+}
+
+/**
+ * Sync active system term settings to match successful enrollment term.
+ *
+ * @param mysqli $conn
+ * @param string $academic_year
+ * @param int $semester
+ * @return void
+ */
+function syncEnrollmentSystemTerm($conn, $academic_year, $semester) {
+    $academic_year = trim((string)$academic_year);
+    $semester = intval($semester);
+
+    $targetAyStart = parseAcademicYearStart($academic_year);
+    if ($targetAyStart === null) {
+        return;
+    }
+
+    if ($semester < 0 || $semester > 2) {
+        return;
+    }
+
+    // Global AY is calendar-year based and must not be auto-shifted by future enrollments.
+    $currentAyStart = getCurrentCalendarAcademicYearStart();
+    if ($targetAyStart !== $currentAyStart) {
+        return;
+    }
+
+    $currentAcademicYear = $currentAyStart . '-' . ($currentAyStart + 1);
+
+    $settingsToSync = [
+        ['key' => 'current_academic_year', 'value' => $currentAcademicYear, 'description' => 'The currently active academic year for enrollment'],
+        ['key' => 'current_semester', 'value' => (string)$semester, 'description' => 'The currently active semester (0 for summer, 1 or 2)'],
+    ];
+
+    $upsertSql = "INSERT INTO system_settings (setting_key, setting_value, description, updated_at)
+                  VALUES (?, ?, ?, NOW())
+                  ON DUPLICATE KEY UPDATE
+                    setting_value = VALUES(setting_value),
+                    description = COALESCE(NULLIF(description, ''), VALUES(description)),
+                    updated_at = NOW()";
+
+    foreach ($settingsToSync as $entry) {
+        db_query($conn, $upsertSql, 'sss', [$entry['key'], $entry['value'], $entry['description']]);
+    }
+
+    clearCache();
+    clearEnrollmentAnalyticsCaches();
+}
 
 // Handle AJAX request for recent students
 if (isset($_GET['action']) && $_GET['action'] === 'get_recent_students') {
@@ -71,6 +283,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'lookup_student') {
     $student = db_fetch_one($student_result);
 
     if ($student) {
+        $pending_failed_courses = getPendingFailedCoursesForRetake($conn, intval($student['student_id']));
+        if ($pending_failed_courses === null) {
+            $conn->close();
+            api_respond_error('Unable to evaluate failed subjects for retake', 500, 'retake_evaluation_failed');
+        }
+
         $full_name = $student['first_name'];
         if (!empty($student['middle_name'])) {
             $full_name .= ' ' . $student['middle_name'];
@@ -86,7 +304,19 @@ if (isset($_GET['action']) && $_GET['action'] === 'lookup_student') {
                 'program_code' => $student['program_code'],
                 'program_name' => $student['program_name'],
                 'year_level' => $student['year_level'],
-                'current_semester' => $student['current_semester']
+                'current_semester' => $student['current_semester'],
+                'retake_mode' => !empty($pending_failed_courses),
+                'pending_failed_count' => count($pending_failed_courses),
+                'pending_failed_courses' => array_map(
+                    function ($course) {
+                        return [
+                            'curriculum_id' => intval($course['curriculum_id'] ?? 0),
+                            'course_code' => $course['course_code'] ?? '',
+                            'course_name' => $course['course_name'] ?? '',
+                        ];
+                    },
+                    $pending_failed_courses
+                ),
             ]
         ];
 
@@ -172,6 +402,27 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
         api_respond_error('Program is required', 422, 'missing_program_id');
     }
 
+    $pending_failed_courses = [];
+    $pending_failed_curriculum_ids = [];
+    $retake_mode = false;
+
+    if ($student_id > 0) {
+        $pending_failed_courses = getPendingFailedCoursesForRetake($conn, $student_id);
+        if ($pending_failed_courses === null) {
+            $conn->close();
+            api_respond_error('Unable to evaluate failed subjects for retake', 500, 'retake_evaluation_failed');
+        }
+
+        $pending_failed_curriculum_ids = array_map(
+            function ($course) {
+                return intval($course['curriculum_id'] ?? 0);
+            },
+            $pending_failed_courses
+        );
+        $pending_failed_curriculum_ids = array_values(array_filter($pending_failed_curriculum_ids));
+        $retake_mode = !empty($pending_failed_curriculum_ids);
+    }
+
     // Build query with GROUP BY to consolidate multiple day entries per course
     // Uses MIN(schedule_id) as representative ID and GROUP_CONCAT for days/times
     $sql = "SELECT MIN(s.schedule_id) as schedule_id, 
@@ -185,10 +436,24 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
             FROM schedules s
             JOIN curriculum c ON s.curriculum_id = c.curriculum_id
             LEFT JOIN teachers t ON s.teacher_id = t.teacher_id
-            WHERE c.program_id = ? AND c.year_level = ? AND c.semester = ?";
-    
-    $params = [$program_id, $year_level, $semester];
-    $types = 'iii';
+            WHERE c.program_id = ?";
+
+    $params = [$program_id];
+    $types = 'i';
+
+    if ($retake_mode) {
+        $failedPlaceholders = implode(',', array_fill(0, count($pending_failed_curriculum_ids), '?'));
+        $sql .= " AND c.curriculum_id IN ($failedPlaceholders)";
+        foreach ($pending_failed_curriculum_ids as $failedCurriculumId) {
+            $params[] = $failedCurriculumId;
+            $types .= 'i';
+        }
+    } else {
+        $sql .= " AND c.year_level = ? AND c.semester = ?";
+        $params[] = $year_level;
+        $params[] = $semester;
+        $types .= 'ii';
+    }
     
     if (!empty($search)) {
         $sql .= " AND (s.schedule_id LIKE ? OR c.course_code LIKE ? OR c.course_name LIKE ?)";
@@ -225,7 +490,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
         $enrolled_courses = [];
         if ($enrolled_result && $enrolled_result !== true) {
             while ($row = mysqli_fetch_assoc($enrolled_result)) {
-                $enrolled_courses[] = $row['curriculum_id'];
+                $enrolled_courses[] = intval($row['curriculum_id'] ?? 0);
             }
         }
         
@@ -242,35 +507,20 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
         $passed_courses = [];
         if ($passed_result && $passed_result !== true) {
             while ($row = mysqli_fetch_assoc($passed_result)) {
-                $passed_courses[] = $row['curriculum_id'];
+                $passed_courses[] = intval($row['curriculum_id'] ?? 0);
             }
-        }
-        
-        // Get courses that were failed (status = 'Failed') - needs retake
-        $failed_sql = "SELECT DISTINCT e.curriculum_id 
-                       FROM enrollments e
-                       WHERE e.student_id = ? AND e.status = 'Failed'";
-        $failed_result = db_query($conn, $failed_sql, 'i', [$student_id]);
-        if ($failed_result === false) {
-            $conn->close();
-            api_respond_error('Unable to load failed courses', 500, 'failed_courses_query_failed');
         }
 
-        $failed_courses = [];
-        if ($failed_result && $failed_result !== true) {
-            while ($row = mysqli_fetch_assoc($failed_result)) {
-                $failed_courses[] = $row['curriculum_id'];
-            }
-        }
+        $failed_courses = $pending_failed_curriculum_ids;
         
         // Add status to each schedule
         foreach ($schedules as &$schedule) {
-            $curriculum_id = $schedule['curriculum_id'];
-            if (in_array($curriculum_id, $enrolled_courses)) {
+            $curriculum_id = intval($schedule['curriculum_id'] ?? 0);
+            if (in_array($curriculum_id, $enrolled_courses, true)) {
                 $schedule['enrollment_status'] = 'enrolled';
-            } elseif (in_array($curriculum_id, $passed_courses)) {
+            } elseif (in_array($curriculum_id, $passed_courses, true)) {
                 $schedule['enrollment_status'] = 'passed';
-            } elseif (in_array($curriculum_id, $failed_courses)) {
+            } elseif (in_array($curriculum_id, $failed_courses, true)) {
                 $schedule['enrollment_status'] = 'failed';
             } else {
                 $schedule['enrollment_status'] = 'available';
@@ -282,6 +532,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
     api_respond_success([
         'schedules' => $schedules,
         'count' => count($schedules),
+        'retake_mode' => $retake_mode,
+        'pending_failed_count' => count($pending_failed_curriculum_ids),
     ], 200, [
         'action' => 'get_schedule_suggestions',
         'program_id' => $program_id,
@@ -294,14 +546,24 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
 
 // Handle AJAX request to enroll a subject
 if (isset($_GET['action']) && $_GET['action'] === 'enroll_subject') {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        $conn->close();
+        api_respond_error('Method not allowed', 405, 'method_not_allowed');
+    }
+
     if (!csrf_validate_request_token($csrf_scope, 'csrf_token', false)) {
         $conn->close();
         api_respond_error('Invalid or missing CSRF token', 403, 'csrf_token_invalid');
     }
 
-    $student_id = intval($_GET['student_id'] ?? 0);
-    $schedule_id = intval($_GET['schedule_id'] ?? 0);
-    $academic_year = trim($_GET['academic_year'] ?? '');
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($input)) {
+        $input = [];
+    }
+
+    $student_id = intval($_POST['student_id'] ?? $input['student_id'] ?? 0);
+    $schedule_id = intval($_POST['schedule_id'] ?? $input['schedule_id'] ?? 0);
+    $academic_year = trim((string)($_POST['academic_year'] ?? $input['academic_year'] ?? ''));
 
     if ($student_id <= 0 || $schedule_id <= 0 || empty($academic_year)) {
         $conn->close();
@@ -310,8 +572,22 @@ if (isset($_GET['action']) && $_GET['action'] === 'enroll_subject') {
         ]);
     }
 
+    $academic_year_error = null;
+    if (!validateEnrollmentAcademicYearWindow($academic_year, $academic_year_error)) {
+        $conn->close();
+        api_respond_error($academic_year_error ?? 'Invalid academic year.', 422, 'invalid_academic_year');
+    }
+
     // Get curriculum_id from schedule
-    $sched_result = db_query($conn, "SELECT curriculum_id, capacity, enrolled_count FROM schedules WHERE schedule_id = ?", 'i', [$schedule_id]);
+    $sched_result = db_query(
+        $conn,
+        "SELECT s.curriculum_id, s.capacity, s.enrolled_count, c.semester
+         FROM schedules s
+         JOIN curriculum c ON s.curriculum_id = c.curriculum_id
+         WHERE s.schedule_id = ?",
+        'i',
+        [$schedule_id]
+    );
     if ($sched_result === false) {
         $conn->close();
         api_respond_error('Unable to load schedule', 500, 'schedule_query_failed');
@@ -325,6 +601,30 @@ if (isset($_GET['action']) && $_GET['action'] === 'enroll_subject') {
     }
 
     $curriculum_id = $sched_info['curriculum_id'];
+
+    $pending_failed_courses = getPendingFailedCoursesForRetake($conn, $student_id);
+    if ($pending_failed_courses === null) {
+        $conn->close();
+        api_respond_error('Unable to evaluate failed subjects for retake', 500, 'retake_evaluation_failed');
+    }
+
+    if (!empty($pending_failed_courses)) {
+        $pending_failed_curriculum_ids = array_map(
+            function ($course) {
+                return intval($course['curriculum_id'] ?? 0);
+            },
+            $pending_failed_courses
+        );
+
+        if (!in_array(intval($curriculum_id), $pending_failed_curriculum_ids, true)) {
+            $conn->close();
+            api_respond_error(
+                'Student is in irregular retake mode. Only failed subjects can be enrolled this term.',
+                409,
+                'retake_only_failed_subjects'
+            );
+        }
+    }
 
     // Check capacity
     if ($sched_info['enrolled_count'] >= $sched_info['capacity']) {
@@ -353,6 +653,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'enroll_subject') {
         // Increment enrolled count
         db_query($conn, "UPDATE schedules SET enrolled_count = enrolled_count + 1 WHERE schedule_id = ?", 'i', [$schedule_id]);
 
+        // Keep system active term aligned with successful enrollment term.
+        syncEnrollmentSystemTerm($conn, $academic_year, intval($sched_info['semester'] ?? 0));
+
         // Get course info for response
         $course_info = db_fetch_one(db_query($conn, "SELECT course_code, course_name FROM curriculum WHERE curriculum_id = ?", 'i', [$curriculum_id]));
 
@@ -373,6 +676,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'enroll_subject') {
 
 // Handle AJAX request for bulk enrollment
 if (isset($_GET['action']) && $_GET['action'] === 'bulk_enroll') {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        $conn->close();
+        api_respond_error('Method not allowed', 405, 'method_not_allowed');
+    }
+
     if (!csrf_validate_request_token($csrf_scope, 'csrf_token', false)) {
         $conn->close();
         api_respond_error('Invalid or missing CSRF token', 403, 'csrf_token_invalid');
@@ -382,6 +690,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'bulk_enroll') {
     $input = json_decode(file_get_contents('php://input'), true);
 
     if (!is_array($input)) {
+        $input = $_POST;
+    }
+
+    if (!is_array($input) || empty($input)) {
         $conn->close();
         api_respond_error('Invalid request payload', 422, 'invalid_request_payload');
     }
@@ -398,6 +710,27 @@ if (isset($_GET['action']) && $_GET['action'] === 'bulk_enroll') {
             'required' => ['student_id', 'program_id', 'academic_year', 'schedule_ids'],
         ]);
     }
+
+    $academic_year_error = null;
+    if (!validateEnrollmentAcademicYearWindow($academic_year, $academic_year_error)) {
+        $conn->close();
+        api_respond_error($academic_year_error ?? 'Invalid academic year.', 422, 'invalid_academic_year');
+    }
+
+    $pending_failed_courses = getPendingFailedCoursesForRetake($conn, $student_id);
+    if ($pending_failed_courses === null) {
+        $conn->close();
+        api_respond_error('Unable to evaluate failed subjects for retake', 500, 'retake_evaluation_failed');
+    }
+
+    $pending_failed_map = [];
+    foreach ($pending_failed_courses as $pending_failed_course) {
+        $cid = intval($pending_failed_course['curriculum_id'] ?? 0);
+        if ($cid > 0) {
+            $pending_failed_map[$cid] = $pending_failed_course['course_code'] ?? ('Curriculum ' . $cid);
+        }
+    }
+    $retake_mode = !empty($pending_failed_map);
 
     $conn->begin_transaction();
 
@@ -425,6 +758,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'bulk_enroll') {
 
             if (!$sched_info) {
                 $errors[] = "Schedule $schedule_id not found";
+                continue;
+            }
+
+            if ($retake_mode && !array_key_exists(intval($sched_info['curriculum_id']), $pending_failed_map)) {
+                $errors[] = "{$sched_info['course_code']} is not a pending failed subject. Only failed subjects can be enrolled for irregular retake.";
                 continue;
             }
 
@@ -465,11 +803,15 @@ if (isset($_GET['action']) && $_GET['action'] === 'bulk_enroll') {
         if (count($enrolled_courses) > 0) {
             $conn->commit();
 
+            // Keep system active term aligned with successful enrollment term.
+            syncEnrollmentSystemTerm($conn, $academic_year, $semester);
+
             $conn->close();
             api_respond_success([
                 'message' => 'Successfully enrolled in ' . count($enrolled_courses) . ' course(s)',
                 'enrolled' => $enrolled_courses,
-                'errors' => $errors
+                'errors' => $errors,
+                'retake_mode' => $retake_mode,
             ], 200, ['action' => 'bulk_enroll']);
         } else {
             $conn->rollback();
@@ -513,9 +855,6 @@ $conn->close();
     <div class="container">
         <header>
             <h1>Enrollment</h1>
-            <div class="header-actions">
-                <a href="../index.php" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Student List</a>
-            </div>
         </header>
 
         <div id="enrollmentApiErrorNotice" role="alert" aria-live="polite" class="hidden" style="display:none; margin-bottom:16px; padding:12px 14px; border-radius:10px; border:1px solid rgba(189,69,48,0.35); background: var(--status-error-bg); color: var(--status-error); font-size:14px;"></div>
@@ -524,7 +863,7 @@ $conn->close();
             <div class="enrollment-form" id="enrollmentForm">
                 <div class="current-info">
                     <strong>Current Academic Year:</strong> <?php echo $current_academic_year_start . '-' . ($current_academic_year_start + 1); ?> | 
-                    <strong>Allowed Range:</strong> <?php echo $current_academic_year_start . '-' . ($current_academic_year_start + 1); ?> to <?php echo $max_allowed_year_start . '-' . ($max_allowed_year_start + 1); ?>
+                    <strong>Allowed Range:</strong> <?php echo $min_allowed_year_start . '-' . ($min_allowed_year_start + 1); ?> to <?php echo $max_allowed_year_start . '-' . ($max_allowed_year_start + 1); ?>
                 </div>
 
                 <div class="form-section">
@@ -601,6 +940,11 @@ $conn->close();
                                 <button type="button" class="btn btn-use-recommended" data-enrollment-action="use-recommended-term">Use Recommended Code</button>
                             </div>
                         </div>
+
+                        <div id="retakeModeNotice" class="term-mismatch-warning hidden">
+                            <div class="warning-title">Irregular Retake Mode</div>
+                            <div class="warning-details" id="retakeModeDetails"></div>
+                        </div>
                     </div>
                 </div>
 
@@ -662,6 +1006,7 @@ $conn->close();
 
     <script>
         const currentAcademicYearStart = <?php echo $current_academic_year_start; ?>;
+        const minAllowedYearStart = <?php echo $min_allowed_year_start; ?>;
         const maxAllowedYearStart = <?php echo $max_allowed_year_start; ?>;
         const enrollmentCsrfToken = <?php echo json_encode(csrf_get_token($csrf_scope)); ?>;
         
@@ -671,6 +1016,18 @@ $conn->close();
         let currentSchedule = null;
         // Rename to pendingSubjects for clarity - subjects queued for enrollment
         let pendingSubjects = [];
+        let successModalRedirectUrl = '';
+        let successModalRedirectTimer = null;
+        let retakeModeActive = false;
+
+        function buildStudentRecordsUrl(studentId) {
+            const parsedId = parseInt(studentId, 10);
+            if (!Number.isInteger(parsedId) || parsedId <= 0) {
+                return '';
+            }
+
+            return `student_schedule_grades.php?id=${encodeURIComponent(String(parsedId))}&tab=schedule`;
+        }
         
         // DOM Elements
         const termCodeInput = document.getElementById('term_code');
@@ -704,6 +1061,8 @@ $conn->close();
         const filterYearLevel = document.getElementById('filterYearLevel');
         const filterSemester = document.getElementById('filterSemester');
         const enrollmentApiErrorNotice = document.getElementById('enrollmentApiErrorNotice');
+        const retakeModeNotice = document.getElementById('retakeModeNotice');
+        const retakeModeDetails = document.getElementById('retakeModeDetails');
         
         let autocompleteTimeout = null;
 
@@ -763,6 +1122,51 @@ $conn->close();
 
             return payload.data || {};
         }
+
+        function applyScheduleContextLabels() {
+            if (retakeModeActive) {
+                filterYearLevel.textContent = 'Irregular';
+                filterSemester.textContent = 'Failed Subject Retakes';
+                return;
+            }
+
+            filterYearLevel.textContent = currentStudent ? currentStudent.year_level : '-';
+            filterSemester.textContent = validatedTermCode
+                ? (validatedTermCode.semester === 0 ? 'Summer' : (validatedTermCode.semester === 1 ? '1st' : '2nd'))
+                : '-';
+        }
+
+        function renderRetakeModeNotice(student) {
+            retakeModeActive = !!(student && student.retake_mode);
+
+            if (!retakeModeNotice || !retakeModeDetails) {
+                return;
+            }
+
+            if (!retakeModeActive) {
+                retakeModeNotice.classList.add('hidden');
+                return;
+            }
+
+            const failedCourses = Array.isArray(student.pending_failed_courses) ? student.pending_failed_courses : [];
+            const failedCount = Number.isInteger(parseInt(student.pending_failed_count, 10))
+                ? parseInt(student.pending_failed_count, 10)
+                : failedCourses.length;
+            const previewCodes = failedCourses
+                .slice(0, 5)
+                .map(course => course.course_code)
+                .filter(Boolean)
+                .join(', ');
+            const remaining = failedCourses.length > 5 ? ` and ${failedCourses.length - 5} more` : '';
+
+            retakeModeDetails.innerHTML = `
+                This student has <strong>${failedCount}</strong> failed subject(s) pending retake.
+                Only failed subjects can be enrolled for this term.
+                ${previewCodes ? `<br><br><strong>Pending failed subjects:</strong> ${previewCodes}${remaining}` : ''}
+            `;
+
+            retakeModeNotice.classList.remove('hidden');
+        }
         
         // Toggle buttons for Recent Students and Available Programs
         toggleRecentStudentsBtn.addEventListener('click', function() {
@@ -794,8 +1198,7 @@ $conn->close();
             if (!currentStudent || !confirmedProgramId || !validatedTermCode) return;
             
             clearEnrollmentApiError();
-            filterYearLevel.textContent = currentStudent.year_level;
-            filterSemester.textContent = validatedTermCode.semester === 0 ? 'Summer' : (validatedTermCode.semester === 1 ? '1st' : '2nd');
+            applyScheduleContextLabels();
             schedulesList.innerHTML = '<span style="color: #6c757d;">Loading...</span>';
             
             const apiUrl = `?action=get_schedule_suggestions&program_id=${confirmedProgramId}&year_level=${currentStudent.year_level}&semester=${validatedTermCode.semester}&student_id=${currentStudent.id}&academic_year=${encodeURIComponent(validatedTermCode.academicYear)}`;
@@ -807,6 +1210,8 @@ $conn->close();
                 })
                 .then(data => {
                     clearEnrollmentApiError();
+                    retakeModeActive = !!data.retake_mode;
+                    applyScheduleContextLabels();
                     const schedules = Array.isArray(data.schedules) ? data.schedules : [];
 
                     if (schedules.length > 0) {
@@ -967,15 +1372,16 @@ $conn->close();
             const semesterPart = parseInt(termCode.substring(2, 3));
             const academicYearStart = 2000 + yearPart;
             const academicYear = academicYearStart + '-' + (academicYearStart + 1);
+            const isBackEnrollment = academicYearStart < currentAcademicYearStart;
             
             if (semesterPart < 0 || semesterPart > 2) {
                 showTermError('Invalid semester digit. Use 0 for summer, 1 for 1st semester, 2 for 2nd semester');
                 return;
             }
             
-            if (academicYearStart < currentAcademicYearStart) {
-                const yearsBehind = currentAcademicYearStart - academicYearStart;
-                showTermError(`Academic year ${academicYear} is ${yearsBehind} year(s) behind current.`);
+            if (academicYearStart < minAllowedYearStart) {
+                const minAcademicYear = minAllowedYearStart + '-' + (minAllowedYearStart + 1);
+                showTermError(`Academic year ${academicYear} is too far behind. Minimum allowed is ${minAcademicYear}.`);
                 return;
             }
             
@@ -987,7 +1393,10 @@ $conn->close();
             
             validatedTermCode = { code: termCode, academicYear: academicYear, semester: semesterPart };
             const semesterNames = {0: 'Summer Term', 1: '1st Semester', 2: '2nd Semester'};
-            termDisplay.innerHTML = `<strong>Academic Year:</strong> ${academicYear} | <strong>Term:</strong> ${semesterNames[semesterPart]}`;
+            const backEnrollmentNotice = isBackEnrollment
+                ? '<br><span style="color: #856404;"><strong>Back-enrollment mode:</strong> enrolling for a prior academic year.</span>'
+                : '';
+            termDisplay.innerHTML = `<strong>Academic Year:</strong> ${academicYear} | <strong>Term:</strong> ${semesterNames[semesterPart]}${backEnrollmentNotice}`;
             termDisplay.classList.remove('hidden');
             studentSection.classList.remove('hidden');
             studentNumberInput.focus();
@@ -1019,6 +1428,7 @@ $conn->close();
             clearEnrollmentApiError();
             studentError.classList.add('hidden');
             studentInfoDisplay.classList.add('hidden');
+            renderRetakeModeNotice(null);
             
             if (!studentNumber) {
                 showStudentError('Student number is required');
@@ -1073,6 +1483,7 @@ $conn->close();
             document.getElementById('semester').value = semesterNames[student.current_semester];
             
             studentInfoDisplay.classList.remove('hidden');
+            renderRetakeModeNotice(student);
             
             // Check for term mismatch
             checkTermMismatch(student);
@@ -1086,6 +1497,11 @@ $conn->close();
             const recommendedTermCode = document.getElementById('recommendedTermCode');
             
             if (!validatedTermCode) {
+                termMismatchWarning.classList.add('hidden');
+                return;
+            }
+
+            if (retakeModeActive) {
                 termMismatchWarning.classList.add('hidden');
                 return;
             }
@@ -1428,8 +1844,9 @@ $conn->close();
                     // Get enrolled course names for display
                     const enrolledCourses = pendingSubjects.map(s => `${s.course_code} - ${s.course_name}`);
                     const warnings = Array.isArray(data.errors) && data.errors.length > 0 ? data.errors : null;
+                    const recordsUrl = buildStudentRecordsUrl(currentStudent ? currentStudent.id : 0);
 
-                    showSuccessModal(data.message || 'Enrollment completed successfully.', enrolledCourses, warnings);
+                    showSuccessModal(data.message || 'Enrollment completed successfully.', enrolledCourses, warnings, recordsUrl);
 
                     // Reset form
                     pendingSubjects = [];
@@ -1507,11 +1924,19 @@ $conn->close();
 </div>
 
 <script>
-function showSuccessModal(message, courses, warnings) {
+function showSuccessModal(message, courses, warnings, redirectUrl) {
     const modal = document.getElementById('successModal');
     const msgEl = document.getElementById('successModalMessage');
     const coursesEl = document.getElementById('successModalCourses');
     const warningsEl = document.getElementById('successModalWarnings');
+    const closeBtn = modal.querySelector('[data-enrollment-action="close-success-modal"]');
+
+    successModalRedirectUrl = typeof redirectUrl === 'string' ? redirectUrl : '';
+
+    if (successModalRedirectTimer) {
+        window.clearTimeout(successModalRedirectTimer);
+        successModalRedirectTimer = null;
+    }
     
     msgEl.textContent = message;
     
@@ -1529,14 +1954,35 @@ function showSuccessModal(message, courses, warnings) {
         warningsEl.classList.add('hidden');
     }
     
+    if (closeBtn) {
+        closeBtn.textContent = successModalRedirectUrl ? 'View Student Records' : 'Done';
+    }
+
     modal.classList.add('active');
     document.body.style.overflow = 'hidden';
+
+    if (successModalRedirectUrl) {
+        successModalRedirectTimer = window.setTimeout(() => {
+            closeSuccessModal();
+        }, 1800);
+    }
 }
 
 function closeSuccessModal() {
     const modal = document.getElementById('successModal');
     modal.classList.remove('active');
     document.body.style.overflow = '';
+
+    if (successModalRedirectTimer) {
+        window.clearTimeout(successModalRedirectTimer);
+        successModalRedirectTimer = null;
+    }
+
+    if (successModalRedirectUrl) {
+        const targetUrl = successModalRedirectUrl;
+        successModalRedirectUrl = '';
+        window.location.href = targetUrl;
+    }
 }
 
 // Close on overlay click

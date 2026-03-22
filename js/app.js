@@ -76,6 +76,32 @@ function clearApiErrorNotice(target) {
 }
 
 /**
+ * Ensure all pages use a consistent site favicon.
+ * Falls back for pages that do not explicitly declare <link rel="icon">.
+ */
+function ensureSiteFavicon() {
+    const pagePath = (window.location.pathname || '').replace(/\\/g, '/');
+    const assetPrefix = /\/(pages|api)\//.test(pagePath) ? '../' : '';
+    const faviconHref = `${assetPrefix}images/site-favicon.svg`;
+
+    const iconLinks = document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"]');
+
+    if (!iconLinks.length) {
+        const icon = document.createElement('link');
+        icon.setAttribute('rel', 'icon');
+        icon.setAttribute('type', 'image/svg+xml');
+        icon.setAttribute('href', faviconHref);
+        document.head.appendChild(icon);
+        return;
+    }
+
+    iconLinks.forEach((link) => {
+        link.setAttribute('href', faviconHref);
+        link.setAttribute('type', 'image/svg+xml');
+    });
+}
+
+/**
  * Show an API error notice with optional retry action.
  * @param {HTMLElement|string} target
  * @param {string} message
@@ -139,7 +165,8 @@ const Validator = {
      */
     isValidPhone(phone) {
         if (!phone) return true; // Optional field
-        const phoneRegex = /^(09|\+639)\d{9}$/;
+        // Accept legacy stored 10-digit local numbers (9xxxxxxxxx) in addition to 09xxxxxxxxx and +639xxxxxxxxx.
+        const phoneRegex = /^(09|9|\+639)\d{9}$/;
         return phoneRegex.test(phone.replace(/[\s-]/g, ''));
     },
 
@@ -332,6 +359,14 @@ function initFormValidation(formSelector = '.add-student-form, .edit-student-for
 
         if (!isValid) {
             e.preventDefault();
+
+            // If submit is blocked, ensure any page-level loading overlay is dismissed.
+            const loadingOverlay = document.getElementById('loadingSpinner');
+            if (loadingOverlay) {
+                loadingOverlay.classList.remove('active');
+            }
+            document.body.style.overflow = '';
+
             // Scroll to first error
             const firstError = form.querySelector('.input-error');
             if (firstError) {
@@ -1058,6 +1093,7 @@ function initDeclarativeConfirmForms() {
 // ===================================
 
 document.addEventListener('DOMContentLoaded', function() {
+    ensureSiteFavicon();
     initSkipLink();
     initSemanticTabs();
     initKeyboardAccessibleActions();

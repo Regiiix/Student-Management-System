@@ -1,27 +1,53 @@
 <?php
 require_once 'config/db_helpers.php';
+require_once 'config/api_auth_helpers.php';
 require_once 'config/sidebar.php';
 
 // Handle notification messages
 $notification = '';
 $notification_type = '';
-$show_added_modal = false;
-$added_student = null;
+$show_success_modal = false;
+$success_modal_data = null;
+$show_failure_modal = false;
+$failure_modal_data = null;
 
 if (isset($_GET['msg'])) {
     switch ($_GET['msg']) {
         case 'dropped':
-            $notification = 'Student "' . htmlspecialchars($_GET['name'] ?? '') . '" has been successfully dropped.';
-            $notification_type = 'success';
+            // Use the same success modal treatment as add-student to keep feedback above sidebar layers.
+            $show_success_modal = true;
+            $success_modal_data = [
+                'title' => 'Student dropped successfully',
+                'name' => htmlspecialchars($_GET['name'] ?? ''),
+                'student_number' => '',
+                'program' => ''
+            ];
             break;
         case 'added':
             // Show modal instead of toast for added students
-            $show_added_modal = true;
-            $added_student = [
+            $show_success_modal = true;
+            $success_modal_data = [
+                'title' => 'Student enrolled successfully',
                 'name' => htmlspecialchars($_GET['name'] ?? ''),
                 'student_number' => htmlspecialchars($_GET['student_number'] ?? ''),
-                'program' => htmlspecialchars($_GET['program'] ?? ''),
-                'student_id' => intval($_GET['student_id'] ?? 0)
+                'program' => htmlspecialchars($_GET['program'] ?? '')
+            ];
+            break;
+        case 'promoted':
+            $show_success_modal = true;
+            $success_modal_data = [
+                'title' => 'Student promoted successfully',
+                'name' => htmlspecialchars($_GET['name'] ?? ''),
+                'student_number' => htmlspecialchars($_GET['student_number'] ?? ''),
+                'program' => htmlspecialchars($_GET['program'] ?? '')
+            ];
+            break;
+        case 'promote_failed':
+            $show_failure_modal = true;
+            $failure_modal_data = [
+                'title' => 'Promotion failed',
+                'name' => htmlspecialchars($_GET['name'] ?? ''),
+                'reason' => htmlspecialchars($_GET['reason'] ?? 'Student cannot be promoted at this time.')
             ];
             break;
         case 'notfound':
@@ -42,6 +68,7 @@ if (empty($_GET)) {
 
 $view = isset($_GET['view']) ? $_GET['view'] : 'students';
 $sidebar_active = in_array($view, ['programs', 'curriculum'], true) ? 'academics' : 'students';
+$api_access_token = api_auth_issue_token();
 
 $sort_field = isset($_GET['sort_field']) ? $_GET['sort_field'] : 'last_name';
 $sort_order = isset($_GET['sort_order']) ? $_GET['sort_order'] : 'asc';
@@ -217,7 +244,7 @@ if ($selected_program > 0) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Student Management System</title>
-    <link rel="icon" href="<?php echo htmlspecialchars(app_asset('favicon.ico')); ?>" type="image/x-icon">
+    <link rel="icon" href="<?php echo htmlspecialchars(app_asset('images/site-favicon.svg')); ?>" type="image/svg+xml">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/index.css')); ?>">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
@@ -424,6 +451,17 @@ if ($selected_program > 0) {
                                 echo "<a class='row-action-link' href='pages/student_schedule_grades.php?id=" . $row['student_id'] . "&tab=schedule&return=" . $student_return_url . "' title='View Schedule & Grades'><i class='bi bi-journal-text' aria-hidden='true'></i>Records</a>";
                                 echo "<a class='row-action-link' href='pages/student_finance.php?id=" . $row['student_id'] . "&return=" . $student_return_url . "' title='View Financial Records'><i class='bi bi-wallet2' aria-hidden='true'></i>Finance</a>";
                                 echo "<button type='button' class='row-action-link row-action-danger' data-student-action='drop' data-student-id='" . (int)$row['student_id'] . "' data-student-name='" . $student_drop_name . "' title='Drop Student'><i class='bi bi-person-dash' aria-hidden='true'></i>Drop</button>";
+                                $current_year_level = intval($row['year_level'] ?? 1);
+                                $current_semester = intval($row['current_semester'] ?? 1);
+                                if ($current_semester === 1) {
+                                    $target_year_level = $current_year_level;
+                                    $target_semester = 2;
+                                } else {
+                                    $target_year_level = $current_year_level + 1;
+                                    $target_semester = 1;
+                                }
+                                $promote_url = htmlspecialchars('pages/promote_student.php?id=' . (int)$row['student_id'] . '&return=' . $student_return_url, ENT_QUOTES);
+                                echo "<button type='button' class='row-action-link row-action-success' data-student-action='promote' data-student-id='" . (int)$row['student_id'] . "' data-student-name='" . $student_drop_name . "' data-promote-url='" . $promote_url . "' data-current-year-level='" . $current_year_level . "' data-current-semester='" . $current_semester . "' data-target-year-level='" . $target_year_level . "' data-target-semester='" . $target_semester . "' title='Promote Student'><i class='bi bi-arrow-up-circle' aria-hidden='true'></i>Promote</button>";
                                 echo "</div>";
                                 echo "</details>";
                                 echo "</div>";
@@ -701,6 +739,44 @@ if ($selected_program > 0) {
     </div>
     <?php endif; ?>
 
+    <!-- Promotion Failure Modal -->
+    <?php if ($show_failure_modal && $failure_modal_data): ?>
+    <div class="modal-overlay active" id="failureModal">
+        <div class="modal success-modal promote-failure-modal">
+            <div class="modal-header">
+                <h2 class="modal-title"><?php echo htmlspecialchars($failure_modal_data['title']); ?></h2>
+            </div>
+
+            <div class="modal-body">
+                <div class="success-details">
+                    <?php if (!empty($failure_modal_data['name'])): ?>
+                    <div class="success-student-info">
+                        <div class="success-avatar">!</div>
+                        <div class="success-info">
+                            <h3><?php echo htmlspecialchars($failure_modal_data['name']); ?></h3>
+                            <p class="student-number">Promotion attempt</p>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+
+                    <div class="success-meta">
+                        <div class="meta-item">
+                            <span class="meta-label">Reason</span>
+                            <span class="meta-value"><?php echo htmlspecialchars($failure_modal_data['reason']); ?></span>
+                        </div>
+                    </div>
+
+                    <p class="success-note">Resolve the requirement above, then try promoting again.</p>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-index-action="close-failure-modal">Close</button>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
     <!-- Confirmation Modal -->
     <div class="modal-overlay" id="confirmModal">
         <div class="modal">
@@ -709,6 +785,10 @@ if ($selected_program > 0) {
             </div>
             <div class="modal-body">
                 <p id="modalMessage">Are you sure you want to proceed?</p>
+                <div id="modalDetails" class="modal-details hidden" aria-live="polite">
+                    <p class="modal-details-label">Promotion Preview</p>
+                    <ul id="modalDetailsList" class="modal-details-list"></ul>
+                </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-index-action="close-confirm-modal">Cancel</button>
@@ -722,32 +802,43 @@ if ($selected_program > 0) {
         <div class="spinner"></div>
     </div>
 
-    <!-- Success Modal for Added Student -->
-    <?php if ($show_added_modal && $added_student): ?>
+    <!-- Success Modal for Student Actions -->
+    <?php if ($show_success_modal && $success_modal_data): ?>
+    <?php
+        $success_name = trim((string)($success_modal_data['name'] ?? ''));
+        $success_initial = strtoupper(substr($success_name, 0, 1));
+        if ($success_initial === '') {
+            $success_initial = '?';
+        }
+    ?>
     <div class="modal-overlay active" id="successModal">
         <div class="modal success-modal">
             <div class="modal-header">
-                <h2 class="modal-title">Student enrolled successfully</h2>
+                <h2 class="modal-title"><?php echo htmlspecialchars($success_modal_data['title']); ?></h2>
             </div>
             
             <div class="modal-body">
                 <div class="success-details">
                     <div class="success-student-info">
                         <div class="success-avatar">
-                            <?php echo strtoupper(substr($added_student['name'], 0, 1)); ?>
+                            <?php echo htmlspecialchars($success_initial); ?>
                         </div>
                         <div class="success-info">
-                            <h3><?php echo $added_student['name']; ?></h3>
-                            <p class="student-number"><?php echo $added_student['student_number']; ?></p>
+                            <h3><?php echo htmlspecialchars($success_name); ?></h3>
+                            <?php if (!empty($success_modal_data['student_number'])): ?>
+                            <p class="student-number"><?php echo htmlspecialchars($success_modal_data['student_number']); ?></p>
+                            <?php endif; ?>
                         </div>
                     </div>
                     
+                    <?php if (!empty($success_modal_data['program'])): ?>
                     <div class="success-meta">
                         <div class="meta-item">
                             <span class="meta-label">Program</span>
-                            <span class="meta-value"><?php echo $added_student['program']; ?></span>
+                            <span class="meta-value"><?php echo htmlspecialchars($success_modal_data['program']); ?></span>
                         </div>
                     </div>
+                    <?php endif; ?>
                     
                     <p class="success-note">
                         Click anywhere to close this notification.
@@ -830,6 +921,25 @@ if ($selected_program > 0) {
                 return;
             }
 
+            if (studentAction === 'promote') {
+                const studentName = trigger.getAttribute('data-student-name') || 'this student';
+                const promoteUrl = trigger.getAttribute('data-promote-url');
+                const currentYear = trigger.getAttribute('data-current-year-level') || '?';
+                const currentSem = trigger.getAttribute('data-current-semester') || '?';
+                const targetYear = trigger.getAttribute('data-target-year-level') || '?';
+                const targetSem = trigger.getAttribute('data-target-semester') || '?';
+                const currentSemLabel = currentSem === '1' ? '1st Sem' : (currentSem === '2' ? '2nd Sem' : 'Sem ' + currentSem);
+                const targetSemLabel = targetSem === '1' ? '1st Sem' : (targetSem === '2' ? '2nd Sem' : 'Sem ' + targetSem);
+                if (promoteUrl) {
+                    const details = [
+                        `Current: Year ${currentYear} ${currentSemLabel}`,
+                        `Target: Year ${targetYear} ${targetSemLabel}`
+                    ];
+                    showModal('Promote Student', `Promote ${studentName} to the next term now?`, promoteUrl, 'Promote', details);
+                }
+                return;
+            }
+
             const action = trigger.getAttribute('data-index-action');
             if (!action) {
                 return;
@@ -847,6 +957,8 @@ if ($selected_program > 0) {
                 confirmAction();
             } else if (action === 'close-success-modal') {
                 closeSuccessModal();
+            } else if (action === 'close-failure-modal') {
+                closeFailureModal();
             } else if (action === 'close-dashboard') {
                 closeDashboard();
             }
@@ -883,6 +995,29 @@ if ($selected_program > 0) {
             document.body.style.overflow = 'hidden';
         }
 
+        function closeFailureModal() {
+            const modal = document.getElementById('failureModal');
+            if (modal) {
+                modal.classList.remove('active');
+                document.body.style.overflow = '';
+                const url = new URL(window.location);
+                url.searchParams.delete('msg');
+                url.searchParams.delete('name');
+                url.searchParams.delete('reason');
+                window.history.replaceState({}, '', url);
+            }
+        }
+
+        const failureModal = document.getElementById('failureModal');
+        if (failureModal) {
+            failureModal.addEventListener('click', function(e) {
+                if (e.target.tagName !== 'A' && !e.target.classList.contains('btn')) {
+                    closeFailureModal();
+                }
+            });
+            document.body.style.overflow = 'hidden';
+        }
+
         // Toast notification
         function closeToast() {
             const toast = document.getElementById('toast');
@@ -901,6 +1036,7 @@ if ($selected_program > 0) {
             url.searchParams.delete('name');
             url.searchParams.delete('has_conflicts');
             url.searchParams.delete('conflict_count');
+                url.searchParams.delete('reason');
             window.history.replaceState({}, '', url);
 
             setTimeout(() => {
@@ -912,10 +1048,32 @@ if ($selected_program > 0) {
         // Modal functionality
         let pendingAction = null;
 
-        function showModal(title, message, actionUrl, confirmText = 'Confirm') {
+        function showModal(title, message, actionUrl, confirmText = 'Confirm', detailLines = []) {
             document.getElementById('modalTitle').textContent = title;
             document.getElementById('modalMessage').textContent = message;
             document.getElementById('modalConfirmBtn').textContent = confirmText;
+
+            const detailsContainer = document.getElementById('modalDetails');
+            const detailsList = document.getElementById('modalDetailsList');
+            if (detailsContainer && detailsList) {
+                detailsList.innerHTML = '';
+                if (Array.isArray(detailLines) && detailLines.length > 0) {
+                    detailLines.forEach((line) => {
+                        const item = document.createElement('li');
+                        item.textContent = line;
+                        if (line.indexOf('Current:') === 0) {
+                            item.classList.add('modal-detail-current');
+                        } else if (line.indexOf('Target:') === 0) {
+                            item.classList.add('modal-detail-target');
+                        }
+                        detailsList.appendChild(item);
+                    });
+                    detailsContainer.classList.remove('hidden');
+                } else {
+                    detailsContainer.classList.add('hidden');
+                }
+            }
+
             pendingAction = actionUrl;
             document.getElementById('confirmModal').classList.add('active');
             document.body.style.overflow = 'hidden';
@@ -946,6 +1104,7 @@ if ($selected_program > 0) {
             if (e.key === 'Escape') {
                 closeModal();
                 closeSuccessModal();
+                closeFailureModal();
                 closeDashboard();
             }
         });
@@ -1099,6 +1258,8 @@ if ($selected_program > 0) {
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
+const STUDENT_SYSTEM_API_TOKEN = <?php echo json_encode($api_access_token, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
+
 // Dashboard Logic
 const dashboardModal = document.getElementById('dashboardModal');
 const dashboardModalError = document.getElementById('dashboardModalError');
@@ -1246,7 +1407,16 @@ async function requestDashboardPayload(forceRefresh = false) {
     }
 
     const endpoint = forceRefresh ? 'api/dashboard_stats.php?refresh=1' : 'api/dashboard_stats.php';
-    const request = fetch(endpoint)
+    const requestHeaders = {
+        'Accept': 'application/json'
+    };
+    if (STUDENT_SYSTEM_API_TOKEN) {
+        requestHeaders['X-Api-Token'] = STUDENT_SYSTEM_API_TOKEN;
+    }
+
+    const request = fetch(endpoint, {
+        headers: requestHeaders
+    })
         .then(async (response) => {
             const payload = await response.json();
             const fallbackError = 'Failed to load dashboard stats.';

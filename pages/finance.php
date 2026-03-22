@@ -17,6 +17,10 @@ $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $filter_status = isset($_GET['status']) ? $_GET['status'] : '';
 $filter_program = isset($_GET['program']) ? intval($_GET['program']) : 0;
 
+$finance_query = $_SERVER['QUERY_STRING'] ?? '';
+$finance_return_url = 'finance.php' . ($finance_query !== '' ? ('?' . $finance_query) : '');
+$finance_return_param = rawurlencode($finance_return_url);
+
 $where = "WHERE 1=1";
 $params = [];
 $types = "";
@@ -265,7 +269,7 @@ $conn->close();
                                 </span>
                             </td>
                             <td>
-                                <a href="student_finance.php?id=<?php echo $s['student_id']; ?>" class="btn-view">
+                                <a href="student_finance.php?id=<?php echo $s['student_id']; ?>&return=<?php echo htmlspecialchars($finance_return_param); ?>" class="btn-view">
                                     View Account
                                 </a>
                             </td>
