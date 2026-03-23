@@ -307,8 +307,8 @@ $conn->close();
         
         // Modern color palette - softer, more accessible colors
         const colors = {
-            primary: ['#6366f1', '#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'],
-            light: ['rgba(99,102,241,0.15)', 'rgba(16,185,129,0.15)', 'rgba(59,130,246,0.15)'],
+            primary: ['#1f3e86', '#157a5f', '#145d95', '#c89a37', '#c45139', '#2f8198', '#4a6fb6', '#aa7424'],
+            light: ['rgba(31,62,134,0.15)', 'rgba(21,122,95,0.15)', 'rgba(20,93,149,0.15)'],
             gradient: function(ctx, color1, color2) {
                 const gradient = ctx.createLinearGradient(0, 0, 0, 280);
                 gradient.addColorStop(0, color1);
@@ -318,9 +318,9 @@ $conn->close();
         };
         
         // Chart.js global defaults for consistent styling
-        Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+        Chart.defaults.font.family = "Manrope, 'Segoe UI', sans-serif";
         Chart.defaults.font.size = 12;
-        Chart.defaults.color = '#64748b';
+        Chart.defaults.color = '#4a6570';
         Chart.defaults.plugins.legend.labels.usePointStyle = true;
         Chart.defaults.plugins.legend.labels.padding = 16;
         
@@ -934,7 +934,7 @@ $conn->close();
         // Render Grades
         function renderGrades(data) {
             // Distribution - Using semantic colors for grades
-            const gradeColors = ['#10b981', '#34d399', '#3b82f6', '#f59e0b', '#f97316', '#ef4444'];
+            const gradeColors = ['#157a5f', '#35ad85', '#145d95', '#c89a37', '#d57b46', '#c45139'];
             renderChart('chartGrades', 'doughnut', {
                 labels: data.distribution?.map(d => d.label) || [],
                 datasets: [{

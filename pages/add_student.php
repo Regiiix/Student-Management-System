@@ -163,21 +163,23 @@ $conn->close();
     <div class="container">
         <header>
             <h1>Add New Student</h1>
+            <p class="form-page-subtitle">Complete the required fields, then review before saving the student profile.</p>
         </header>
 
         <?php if ($message): ?>
-            <div class="message <?php echo $message_type; ?>">
+            <div class="message <?php echo $message_type; ?>" role="alert" aria-live="polite">
                 <?php echo $message; ?>
             </div>
         <?php endif; ?>
 
         <div class="student-details">
-            <form method="post" class="add-student-form">
+            <form method="post" class="add-student-form workflow-form">
                 <?php echo csrf_token_field($csrf_scope); ?>
                 <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($add_student_submission_token); ?>">
                 <!-- Personal Information -->
                 <div class="form-section">
                     <h3>Personal Information</h3>
+                    <p class="section-note">Basic contact and identity details used for student records.</p>
                     <div class="form-row">
                         <div class="form-group">
                             <label for="first_name">First Name <span class="required">*</span></label>
@@ -225,6 +227,7 @@ $conn->close();
                 <!-- Academic Information -->
                 <div class="form-section">
                     <h3>Academic Information</h3>
+                    <p class="section-note">Current entry-level settings for enrollment and curriculum mapping.</p>
                     <div class="form-row">
                         <div class="form-group">
                             <label for="year_level">Year Level <span class="required">*</span></label>

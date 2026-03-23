@@ -137,42 +137,52 @@ if (!function_exists('renderAppSidebar')) {
         $basePath = isset($options['basePath']) ? (string)$options['basePath'] : '';
         $routes = getAppRouteMap($basePath);
 
-        $links = [
+        $navGroups = [
             [
-                'id' => 'students',
-                'label' => 'Students',
-                'icon' => 'bi-people',
-                'href' => $routes['students'],
+                'label' => 'Academic Operations',
+                'items' => [
+                    [
+                        'id' => 'students',
+                        'label' => 'Students',
+                        'icon' => 'bi-people',
+                        'href' => $routes['students'],
+                    ],
+                    [
+                        'id' => 'academics',
+                        'label' => 'Academics',
+                        'icon' => 'bi-journal-richtext',
+                        'href' => $routes['academics'],
+                    ],
+                    [
+                        'id' => 'enrollment',
+                        'label' => 'Enrollment',
+                        'icon' => 'bi-person-plus',
+                        'href' => $routes['enrollment'],
+                    ],
+                    [
+                        'id' => 'analytics',
+                        'label' => 'Analytics',
+                        'icon' => 'bi-graph-up-arrow',
+                        'href' => $routes['analytics'],
+                    ],
+                ],
             ],
             [
-                'id' => 'academics',
-                'label' => 'Academics',
-                'icon' => 'bi-journal-richtext',
-                'href' => $routes['academics'],
-            ],
-            [
-                'id' => 'enrollment',
-                'label' => 'Enrollment',
-                'icon' => 'bi-person-plus',
-                'href' => $routes['enrollment'],
-            ],
-            [
-                'id' => 'analytics',
-                'label' => 'Analytics',
-                'icon' => 'bi-graph-up-arrow',
-                'href' => $routes['analytics'],
-            ],
-            [
-                'id' => 'finance',
-                'label' => 'Finance',
-                'icon' => 'bi-wallet2',
-                'href' => $routes['finance'],
-            ],
-            [
-                'id' => 'scholarships',
-                'label' => 'Scholarships',
-                'icon' => 'bi-award',
-                'href' => $routes['scholarships'],
+                'label' => 'Student Services',
+                'items' => [
+                    [
+                        'id' => 'finance',
+                        'label' => 'Finance',
+                        'icon' => 'bi-wallet2',
+                        'href' => $routes['finance'],
+                    ],
+                    [
+                        'id' => 'scholarships',
+                        'label' => 'Scholarships',
+                        'icon' => 'bi-award',
+                        'href' => $routes['scholarships'],
+                    ],
+                ],
             ],
         ];
 
@@ -206,8 +216,8 @@ if (!function_exists('renderAppSidebar')) {
                         <i class="bi bi-mortarboard-fill"></i>
                     </span>
                     <span class="sidebar-brand-text">
-                        <strong>regiiix</strong>
-                        <small>dev</small>
+                        <strong>Student System</strong>
+                        <small>School Portal</small>
                     </span>
                 </a>
                 <button type="button" class="sidebar-close" data-sidebar-close aria-label="Close navigation">
@@ -216,21 +226,26 @@ if (!function_exists('renderAppSidebar')) {
             </div>
 
             <nav class="sidebar-nav" aria-label="Primary links">
-                <?php foreach ($links as $link): ?>
-                    <?php
-                    $isActive = $active === $link['id'];
-                    $linkClass = $isActive ? 'sidebar-link is-active' : 'sidebar-link';
-                    ?>
-                    <a
-                        class="<?php echo $linkClass; ?>"
-                        href="<?php echo htmlspecialchars($link['href']); ?>"
-                        <?php echo $isActive ? 'aria-current="page"' : ''; ?>
-                    >
-                        <span class="sidebar-link-icon" aria-hidden="true">
-                            <i class="bi <?php echo htmlspecialchars($link['icon']); ?>"></i>
-                        </span>
-                        <span class="sidebar-link-label"><?php echo htmlspecialchars($link['label']); ?></span>
-                    </a>
+                <?php foreach ($navGroups as $group): ?>
+                    <div class="sidebar-nav-group">
+                        <p class="sidebar-nav-group-label"><?php echo htmlspecialchars($group['label']); ?></p>
+                        <?php foreach ($group['items'] as $link): ?>
+                            <?php
+                            $isActive = $active === $link['id'];
+                            $linkClass = $isActive ? 'sidebar-link is-active' : 'sidebar-link';
+                            ?>
+                            <a
+                                class="<?php echo $linkClass; ?>"
+                                href="<?php echo htmlspecialchars($link['href']); ?>"
+                                <?php echo $isActive ? 'aria-current="page"' : ''; ?>
+                            >
+                                <span class="sidebar-link-icon" aria-hidden="true">
+                                    <i class="bi <?php echo htmlspecialchars($link['icon']); ?>"></i>
+                                </span>
+                                <span class="sidebar-link-label"><?php echo htmlspecialchars($link['label']); ?></span>
+                            </a>
+                        <?php endforeach; ?>
+                    </div>
                 <?php endforeach; ?>
             </nav>
 

@@ -165,6 +165,7 @@ $personal_info_url = appendReturnParam('student_personal.php?id=' . $student_id,
     <div class="container">
         <header>
             <h1>Edit Grades</h1>
+            <p class="form-page-subtitle">Review term filters first, then save all grade updates in one submission.</p>
             <div class="header-actions">
                 <a href="<?php echo htmlspecialchars($student_list_url); ?>" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Student List</a>
                 <a href="<?php echo htmlspecialchars($records_url); ?>" class="btn btn-grades"><i class="bi bi-journal-bookmark" aria-hidden="true"></i>View Records</a>
@@ -188,7 +189,7 @@ $personal_info_url = appendReturnParam('student_personal.php?id=' . $student_id,
         </div>
 
         <?php if ($message): ?>
-            <div class="message <?php echo $message_type; ?>">
+            <div class="message <?php echo $message_type; ?>" role="alert" aria-live="polite">
                 <?php echo $message; ?>
             </div>
         <?php endif; ?>
@@ -227,8 +228,9 @@ $personal_info_url = appendReturnParam('student_personal.php?id=' . $student_id,
             <?php if (empty($grades)): ?>
                 <p class="no-data">No enrollments found for this student<?php echo $selected_year > 0 ? ' for the selected filters' : ''; ?>.</p>
             <?php else: ?>
-                <form method="post">
+                <form method="post" class="workflow-form">
                     <?php echo csrf_token_field($csrf_scope); ?>
+                    <p class="section-note">Use blanks only when removing existing grades. Status can be adjusted per course.</p>
                     <?php
                     // Group grades by year and semester
                     $grouped_grades = [];

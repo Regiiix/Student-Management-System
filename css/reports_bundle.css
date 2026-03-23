@@ -10,8 +10,8 @@
             --dash-warning: #aa7424;
             --dash-danger: #c45139;
             --dash-info: #145d95;
-            --dash-purple: #ef6c3f;
-            --dash-pink: #da7a4d;
+            --dash-accent: #c89a37;
+            --dash-accent-strong: #a87b1f;
             --dash-cyan: #2f8198;
             --dash-bg: #f1f6f4;
             --dash-surface: #ffffff;
@@ -33,9 +33,9 @@
         }
         
         html body.page-dashboard {
-            background: linear-gradient(135deg, #f0f4ff 0%, #faf5ff 50%, #f0fdf4 100%);
+            background: linear-gradient(132deg, #eef4ff 0%, #f4f8ff 44%, #f5f8f2 100%);
             min-height: 100vh;
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: var(--font-ui);
             color: var(--dash-text);
             margin: 0;
             padding: 24px;
@@ -43,7 +43,7 @@
         
         /* Header - Modern glass morphism */
         body.page-dashboard .dashboard-header {
-            background: linear-gradient(135deg, var(--dash-primary) 0%, var(--dash-purple) 50%, var(--dash-pink) 100%);
+            background: linear-gradient(135deg, #1f3e86 0%, #1c5f95 52%, #bd8d2f 100%);
             color: white;
             padding: 32px 40px;
             display: flex;
@@ -53,7 +53,7 @@
             gap: 24px;
             border-radius: var(--dash-radius-lg);
             margin-bottom: 32px;
-            box-shadow: var(--dash-shadow-xl), 0 0 40px rgba(99, 102, 241, 0.3);
+            box-shadow: var(--dash-shadow-xl), 0 0 34px rgba(31, 62, 134, 0.22);
             position: relative;
             overflow: hidden;
         }
@@ -350,12 +350,12 @@
             opacity: 0.15;
         }
         
-        .stat-card::before { background: var(--dash-primary); }
-        .stat-card.success::before { background: var(--dash-success); }
-        .stat-card.info::before { background: var(--dash-info); }
-        .stat-card.warning::before { background: var(--dash-warning); }
-        .stat-card.danger::before { background: var(--dash-danger); }
-        .stat-card.purple::before { background: var(--dash-purple); }
+        body.page-dashboard .stat-card::before { background: var(--dash-primary); }
+        body.page-dashboard .stat-card.success::before { background: var(--dash-success); }
+        body.page-dashboard .stat-card.info::before { background: var(--dash-info); }
+        body.page-dashboard .stat-card.warning::before { background: var(--dash-warning); }
+        body.page-dashboard .stat-card.danger::before { background: var(--dash-danger); }
+        body.page-dashboard .stat-card.purple::before { background: var(--dash-accent); }
         
         body.page-dashboard .stat-card .stat-icon {
             width: 48px;
@@ -366,29 +366,29 @@
             justify-content: center;
             font-size: 24px;
             margin-bottom: 16px;
-            background: linear-gradient(135deg, var(--dash-primary), var(--dash-primary-light));
+            background: linear-gradient(135deg, #1f3e86, #145d95);
             color: white;
-            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+            box-shadow: 0 4px 12px rgba(31, 62, 134, 0.3);
         }
         
         body.page-dashboard .stat-card.success .stat-icon {
-            background: linear-gradient(135deg, #059669, #34d399); 
+            background: linear-gradient(135deg, #157a5f, #34a383); 
             box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
         }
         body.page-dashboard .stat-card.info .stat-icon {
-            background: linear-gradient(135deg, #2563eb, #60a5fa); 
+            background: linear-gradient(135deg, #145d95, #4a87ba); 
             box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
         }
         body.page-dashboard .stat-card.warning .stat-icon {
-            background: linear-gradient(135deg, #d97706, #fbbf24); 
+            background: linear-gradient(135deg, #aa7424, #d0a241); 
             box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
         }
         body.page-dashboard .stat-card.danger .stat-icon {
-            background: linear-gradient(135deg, #dc2626, #f87171); 
+            background: linear-gradient(135deg, #c45139, #dd7d6a); 
             box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
         }
         body.page-dashboard .stat-card.purple .stat-icon {
-            background: linear-gradient(135deg, #ef6c3f, #f2a07f); 
+            background: linear-gradient(135deg, #c89a37, #ddbb6b); 
             box-shadow: 0 4px 12px rgba(239, 108, 63, 0.3);
         }
         
@@ -448,9 +448,9 @@
         }
         
         body.page-dashboard .dashboard-tab.active {
-            background: linear-gradient(135deg, var(--dash-primary), var(--dash-purple));
+            background: linear-gradient(135deg, #1f3e86, #145d95);
             color: white;
-            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+            box-shadow: 0 4px 15px rgba(31, 62, 134, 0.34);
         }
         
         body.page-dashboard .tab-content {
@@ -492,7 +492,7 @@
             border-radius: var(--dash-radius);
             padding: 28px;
             box-shadow: var(--dash-shadow-sm);
-            border: 1px solid var(--dash-border);
+            border: 1px solid rgba(198, 216, 211, 0.9);
             transition: all 0.3s ease;
         }
         
@@ -524,8 +524,8 @@
             font-size: 0.75rem;
             padding: 6px 14px;
             border-radius: 50px;
-            background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.1));
-            color: var(--dash-primary);
+            background: linear-gradient(135deg, rgba(20, 93, 149, 0.12), rgba(200, 154, 55, 0.16));
+            color: #1f3e86;
             font-weight: 600;
         }
         
@@ -550,7 +550,7 @@
             text-align: left;
             font-weight: 600;
             color: var(--dash-text-secondary);
-            background: var(--dash-bg);
+            background: linear-gradient(180deg, #f6fbfa 0%, #edf5f3 100%);
             font-size: 0.75rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
@@ -577,7 +577,7 @@
         }
         
         body.page-dashboard .data-table tbody tr:hover {
-            background: linear-gradient(90deg, rgba(99, 102, 241, 0.04), rgba(139, 92, 246, 0.04));
+            background: linear-gradient(90deg, rgba(15, 109, 106, 0.06), rgba(20, 93, 149, 0.04));
         }
         
         body.page-dashboard .data-table td small {
@@ -593,8 +593,10 @@
 
         body.page-dashboard .table-empty {
             text-align: center;
-            color: #70838e;
-            font-style: italic;
+            color: var(--dash-text-secondary);
+            font-style: normal;
+            font-weight: 600;
+            background: linear-gradient(180deg, rgba(250, 252, 252, 0.96), rgba(241, 247, 245, 0.92));
         }
         
         /* Progress Bars */
@@ -611,10 +613,10 @@
             transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
         }
         
-        .progress-bar .fill.success { background: linear-gradient(90deg, #059669, #34d399); }
-        .progress-bar .fill.warning { background: linear-gradient(90deg, #d97706, #fbbf24); }
-        .progress-bar .fill.danger { background: linear-gradient(90deg, #dc2626, #f87171); }
-        .progress-bar .fill.info { background: linear-gradient(90deg, #2563eb, #60a5fa); }
+        body.page-dashboard .progress-bar .fill.success { background: linear-gradient(90deg, #157a5f, #35ad85); }
+        body.page-dashboard .progress-bar .fill.warning { background: linear-gradient(90deg, #aa7424, #d0a241); }
+        body.page-dashboard .progress-bar .fill.danger { background: linear-gradient(90deg, #c45139, #e2826f); }
+        body.page-dashboard .progress-bar .fill.info { background: linear-gradient(90deg, #145d95, #4d90bf); }
         
         /* Status Badges */
         body.page-dashboard .status-good {
@@ -721,9 +723,9 @@
             color: var(--dash-primary);
         }
         
-        .revenue-item.positive h3 { color: #059669; }
-        .revenue-item.negative h3 { color: #dc2626; }
-        .revenue-item.warning h3 { color: #d97706; }
+        body.page-dashboard .revenue-item.positive h3 { color: #157a5f; }
+        body.page-dashboard .revenue-item.negative h3 { color: #c45139; }
+        body.page-dashboard .revenue-item.warning h3 { color: #aa7424; }
         
         /* Loading Overlay */
         body.page-dashboard .loading-overlay {
@@ -732,7 +734,7 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(255,255,255,0.9);
+            background: rgba(246, 250, 252, 0.92);
             display: flex;
             flex-direction: column;
             justify-content: center;

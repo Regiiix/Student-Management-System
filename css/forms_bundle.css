@@ -15,87 +15,88 @@
             display: block;
             margin-bottom: 6px;
             font-weight: 500;
-            color: #495057;
+            color: var(--text-secondary);
             font-size: 14px;
         }
         .form-group input,
         .form-group select {
             width: 100%;
             padding: 10px 12px;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
             font-size: 14px;
             transition: border-color 0.2s, box-shadow 0.2s;
         }
         .form-group input:focus,
         .form-group select:focus {
             outline: none;
-            border-color: #0066cc;
-            box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(31, 62, 134, 0.14);
         }
         .form-group input:disabled,
         .form-group select:disabled {
-            background: #e9ecef;
+            background: var(--surface-muted);
             cursor: not-allowed;
         }
         .form-section {
-            background: #f8f9fa;
+            background: var(--surface-soft);
             padding: 20px;
-            border-radius: 8px;
+            border-radius: var(--radius-lg);
             margin-bottom: 25px;
+            border: 1px solid var(--border);
         }
         .form-section h3 {
             margin: 0 0 15px 0;
             font-size: 16px;
-            color: #343a40;
-            border-bottom: 1px solid #dee2e6;
+            color: var(--text);
+            border-bottom: 1px solid var(--border);
             padding-bottom: 10px;
         }
-        .required { color: #dc3545; }
+        .required { color: var(--status-error); }
         .help-text {
             font-size: 12px;
-            color: #6c757d;
+            color: var(--text-muted);
             margin-top: 5px;
         }
         .current-info {
-            background: #d1ecf1;
-            border: 1px solid #bee5eb;
-            color: #0c5460;
+            background: var(--status-info-bg);
+            border: 1px solid rgba(31, 78, 168, 0.24);
+            color: var(--status-info);
             padding: 12px 15px;
-            border-radius: 6px;
+            border-radius: var(--radius-md);
             margin-bottom: 20px;
             font-size: 13px;
         }
         .hidden { display: none !important; }
         .student-info-section {
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
+            background: var(--status-success-bg);
+            border: 1px solid rgba(21, 93, 57, 0.24);
             padding: 15px;
-            border-radius: 6px;
+            border-radius: var(--radius-md);
             margin-top: 15px;
         }
         .student-info-section h4 {
             margin: 0 0 10px 0;
-            color: #155724;
+            color: var(--status-success);
             font-size: 14px;
         }
         .inline-error {
-            color: #721c24;
+            color: var(--status-error);
             font-size: 13px;
             margin-top: 10px;
             padding: 12px 15px;
-            background: #f8d7da;
-            border: 1px solid #f5c6cb;
-            border-radius: 6px;
+            background: var(--status-error-bg);
+            border: 1px solid rgba(185, 45, 45, 0.24);
+            border-radius: var(--radius-md);
         }
         .term-display {
-            background: #e7f3ff;
-            border: 1px solid #b6d4fe;
+            background: var(--status-info-bg);
+            border: 1px solid rgba(31, 78, 168, 0.24);
             padding: 10px 15px;
-            border-radius: 6px;
+            border-radius: var(--radius-md);
             margin-top: 10px;
             font-size: 13px;
-            color: #084298;
+            color: var(--status-info);
         }
         /* Modal styles */
         .modal-overlay {
@@ -104,30 +105,32 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0,0,0,0.5);
+            background: rgba(17, 30, 62, 0.5);
             display: flex;
             align-items: center;
             justify-content: center;
             z-index: 14000;
         }
         .modal-content {
-            background: #fff;
+            background: var(--surface);
             padding: 25px;
-            border-radius: 10px;
+            border-radius: var(--radius-lg);
             max-width: 600px;
             width: 90%;
             max-height: 80vh;
             overflow-y: auto;
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow-md);
         }
         .modal-header {
             font-size: 18px;
             font-weight: 600;
             margin-bottom: 15px;
-            color: #343a40;
+            color: var(--text);
         }
         .modal-body {
             margin-bottom: 20px;
-            color: #495057;
+            color: var(--text-secondary);
         }
         .modal-actions {
             display: flex;
@@ -144,27 +147,27 @@
         .schedule-table th, .schedule-table td {
             padding: 10px 12px;
             text-align: left;
-            border: 1px solid #dee2e6;
+            border: 1px solid var(--border);
         }
         .schedule-table th {
-            background: #f8f9fa;
+            background: var(--surface-soft);
             font-weight: 600;
-            color: #495057;
+            color: var(--text-secondary);
         }
         .schedule-table tr:hover {
-            background: #f8f9fa;
+            background: var(--surface-soft);
         }
         /* Pending subjects list */
         .pending-list {
-            background: #fff3cd;
-            border: 1px solid #ffc107;
+            background: var(--status-warning-bg);
+            border: 1px solid rgba(138, 97, 24, 0.24);
             padding: 15px;
-            border-radius: 6px;
+            border-radius: var(--radius-md);
             margin-top: 15px;
         }
         .pending-list h4 {
             margin: 0 0 10px 0;
-            color: #856404;
+            color: var(--status-warning);
             font-size: 14px;
         }
         .pending-item {
@@ -179,7 +182,7 @@
         }
         .pending-item:last-child { margin-bottom: 0; }
         .pending-item .remove-btn {
-            background: #dc3545;
+            background: var(--status-error);
             color: #fff;
             border: none;
             padding: 4px 10px;
@@ -188,7 +191,7 @@
             font-size: 12px;
         }
         .pending-item .remove-btn:hover {
-            background: #c82333;
+            background: #9f2626;
         }
         .enroll-actions {
             margin-top: 15px;
@@ -196,14 +199,14 @@
             gap: 10px;
         }
         .btn-enroll-student {
-            background: #007bff;
+            background: var(--primary);
             color: #fff;
             padding: 12px 24px;
             font-size: 16px;
             font-weight: 600;
         }
         .btn-enroll-student:hover {
-            background: #0056b3;
+            background: var(--primary-strong);
         }
         .btn-enroll-student:disabled {
             background: #6c757d;
@@ -1061,6 +1064,89 @@ body.page-edit-student .btn-cancel:hover {
     background: #dee2e6;
 }
 
+body.page-edit-student .save-result-modal {
+    max-width: 620px;
+}
+
+body.page-edit-student .save-result-modal .modal-header {
+    align-items: center;
+}
+
+body.page-edit-student .save-result-success .modal-header {
+    background: var(--status-success-bg);
+    border-bottom-color: rgba(21, 122, 95, 0.26);
+}
+
+body.page-edit-student .save-result-success .modal-header h3 {
+    color: var(--status-success);
+}
+
+body.page-edit-student .save-result-error .modal-header {
+    background: var(--status-error-bg);
+    border-bottom-color: rgba(189, 69, 48, 0.28);
+}
+
+body.page-edit-student .save-result-error .modal-header h3 {
+    color: var(--status-error);
+}
+
+body.page-edit-student .save-result-message {
+    margin: 0;
+    color: var(--text-main);
+}
+
+body.page-edit-student .save-result-subtitle {
+    margin: 14px 0 8px;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+}
+
+body.page-edit-student .save-result-change-list {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 6px;
+}
+
+body.page-edit-student .save-result-change-list li {
+    color: var(--text-main);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+body.page-edit-student .save-change-label {
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+body.page-edit-student .save-change-arrow {
+    color: var(--text-secondary);
+}
+
+body.page-edit-student .save-result-note {
+    margin: 12px 0 0;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    background: rgba(20, 93, 149, 0.08);
+    border: 1px solid rgba(20, 93, 149, 0.2);
+    color: var(--status-info);
+    font-size: 13px;
+}
+
+body.page-edit-student .save-result-note-success {
+    background: var(--status-success-bg);
+    border-color: rgba(21, 122, 95, 0.24);
+    color: var(--status-success);
+}
+
+body.page-edit-student .save-result-note-error {
+    background: var(--status-error-bg);
+    border-color: rgba(189, 69, 48, 0.24);
+    color: var(--status-error);
+}
+
 /* Edit grades page styles (scoped) */
 body.page-edit-grades .grade-input {
     width: 70px;
@@ -1145,4 +1231,182 @@ body.page-edit-grades .grade-scale span {
     padding: 3px 8px;
     border-radius: 4px;
     font-size: 12px;
+}
+
+/* ===================================
+   Phase 4: Form Workflow Modernization
+   =================================== */
+
+body.page-add-student .form-page-subtitle,
+body.page-edit-student .form-page-subtitle,
+body.page-edit-grades .form-page-subtitle {
+    margin: 8px 0 0;
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+body.page-add-student .student-details,
+body.page-edit-student .student-details,
+body.page-edit-grades .section {
+    background: linear-gradient(170deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 248, 0.92));
+    border: 1px solid var(--border-color);
+    border-radius: 18px;
+    box-shadow: var(--shadow-sm);
+}
+
+body.page-add-student .workflow-form,
+body.page-edit-student .workflow-form,
+body.page-edit-grades .workflow-form {
+    display: grid;
+    gap: 18px;
+}
+
+body.page-add-student .form-section,
+body.page-edit-student .form-section,
+body.page-edit-grades .workflow-form .section-title {
+    position: relative;
+}
+
+body.page-add-student .form-section,
+body.page-edit-student .form-section {
+    border: 1px solid rgba(197, 215, 210, 0.84);
+    background: linear-gradient(180deg, rgba(250, 253, 252, 0.96), rgba(242, 248, 246, 0.9));
+    border-left: 4px solid rgba(15, 109, 106, 0.42);
+}
+
+body.page-add-student .form-section h3,
+body.page-edit-student .form-section h3,
+body.page-edit-grades .workflow-form .section-title {
+    font-family: var(--font-heading);
+    letter-spacing: -0.01em;
+    color: var(--text-main);
+}
+
+body.page-add-student .section-note,
+body.page-edit-student .section-note,
+body.page-edit-grades .section-note {
+    margin: -2px 0 14px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+body.page-add-student .form-group label,
+body.page-edit-student .form-group label {
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+body.page-add-student .form-group input,
+body.page-add-student .form-group select,
+body.page-add-student .form-group textarea,
+body.page-edit-student .form-group input,
+body.page-edit-student .form-group select,
+body.page-edit-student .form-group textarea,
+body.page-edit-grades .grade-input,
+body.page-edit-grades .status-select {
+    border-radius: 10px;
+    border-color: rgba(159, 184, 177, 0.78);
+    background: rgba(255, 255, 255, 0.96);
+}
+
+body.page-add-student .form-group input:focus,
+body.page-add-student .form-group select:focus,
+body.page-add-student .form-group textarea:focus,
+body.page-edit-student .form-group input:focus,
+body.page-edit-student .form-group select:focus,
+body.page-edit-student .form-group textarea:focus,
+body.page-edit-grades .grade-input:focus,
+body.page-edit-grades .status-select:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(15, 109, 106, 0.16);
+}
+
+body.page-add-student .message,
+body.page-edit-student .message,
+body.page-edit-grades .message {
+    border-radius: 14px;
+    border-width: 1px;
+    border-style: solid;
+    font-weight: 500;
+    line-height: 1.55;
+}
+
+body.page-add-student .message.error,
+body.page-edit-student .message.error,
+body.page-edit-grades .message.error {
+    background: var(--status-error-bg);
+    border-color: rgba(189, 69, 48, 0.38);
+    color: var(--status-error);
+}
+
+body.page-add-student .message.success,
+body.page-edit-student .message.success,
+body.page-edit-grades .message.success {
+    background: var(--status-success-bg);
+    border-color: rgba(21, 122, 95, 0.3);
+    color: var(--status-success);
+}
+
+body.page-edit-student .message.warning,
+body.page-edit-grades .message.warning {
+    background: var(--status-warning-bg);
+    border-color: rgba(161, 104, 26, 0.35);
+    color: var(--status-warning);
+}
+
+body.page-edit-student .message.info,
+body.page-edit-grades .message.info {
+    background: var(--status-info-bg);
+    border-color: rgba(20, 93, 149, 0.35);
+    color: var(--status-info);
+}
+
+body.page-add-student .form-actions,
+body.page-edit-student .form-actions,
+body.page-edit-grades .form-actions {
+    position: sticky;
+    bottom: 10px;
+    z-index: 8;
+    border: 1px solid rgba(197, 215, 210, 0.9);
+    border-radius: 14px;
+    background: rgba(252, 255, 254, 0.94);
+    box-shadow: 0 10px 22px rgba(19, 54, 61, 0.11);
+    backdrop-filter: blur(4px);
+}
+
+body.page-add-student .form-actions .btn,
+body.page-edit-student .form-actions .btn,
+body.page-edit-grades .form-actions .btn {
+    min-height: 40px;
+}
+
+@media (max-width: 900px) {
+    body.page-add-student .form-row,
+    body.page-edit-student .form-row {
+        gap: 14px;
+    }
+
+    body.page-add-student .form-section,
+    body.page-edit-student .form-section {
+        padding: 16px;
+    }
+}
+
+@media (max-width: 768px) {
+    body.page-add-student .form-actions,
+    body.page-edit-student .form-actions,
+    body.page-edit-grades .form-actions {
+        position: static;
+        bottom: auto;
+        box-shadow: none;
+        backdrop-filter: none;
+    }
+
+    body.page-add-student .form-page-subtitle,
+    body.page-edit-student .form-page-subtitle,
+    body.page-edit-grades .form-page-subtitle {
+        font-size: 13px;
+    }
 }

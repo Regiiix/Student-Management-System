@@ -15,6 +15,20 @@ $message = '';
 $csrf_scope = 'student_finance_payment';
 csrf_ensure_session();
 
+$finance_perf_enabled = isset($_GET['perf']) && $_GET['perf'] === '1';
+$finance_perf_start = microtime(true);
+$finance_perf_marks = [];
+$finance_perf_mark = function ($label) use (&$finance_perf_marks, $finance_perf_start, $finance_perf_enabled) {
+    if (!$finance_perf_enabled) {
+        return;
+    }
+
+    $finance_perf_marks[] = [
+        'label' => (string)$label,
+        'ms' => round((microtime(true) - $finance_perf_start) * 1000, 2)
+    ];
+};
+
 if (!isset($_SESSION['student_finance_payment_tokens']) || !is_array($_SESSION['student_finance_payment_tokens'])) {
     $_SESSION['student_finance_payment_tokens'] = [];
 }
@@ -105,6 +119,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 }
 
+$finance_perf_mark('post_actions_complete');
+
 
 // Student Info
 $s_sql = "SELECT s.*, p.program_code FROM students s LEFT JOIN programs p ON s.program_id = p.program_id WHERE s.student_id = ?";
@@ -133,6 +149,8 @@ $fixed_fees[] = [
     'amount' => $program_lab_fee
 ];
 $total_fixed_fee += $program_lab_fee;
+
+$finance_perf_mark('student_and_fee_config_loaded');
 
 // Get available overpayment credits
 $available_credits = getAvailableOverpaymentCredit($conn, $student_id);
@@ -178,6 +196,8 @@ if ($student_current_ay === '') {
 if ($student_current_ay === '') {
         $student_current_ay = $current_sys_ay;
 }
+
+$finance_perf_mark('term_context_resolved');
 
 // 2. Handle Selection
 // Default to Current Context if nothing selected
@@ -245,6 +265,8 @@ if ($filter_ay === '' && $filter_sem === 0) {
 // Use the new function that calculates running balance with carry-forward
 $all_terms_data = calculateAllTermsWithCarryForward($conn, $student_id);
 $all_terms_calculated = $all_terms_data['terms'];
+
+$finance_perf_mark('carry_forward_calculated');
 
 // Build SOA array based on filter
 $grand_total_assessment = 0;
@@ -317,6 +339,8 @@ $pay_sql .= " ORDER BY payment_date DESC";
 
 $payments = db_fetch_all(db_query($conn, $pay_sql, $pay_types, $pay_params));
 
+$finance_perf_mark('payments_loaded');
+
 // Total paid is already calculated in grand_total_paid from carry-forward calculation
 
 $finance_page_url = getAppRoute('finance', '..');
@@ -327,6 +351,27 @@ if (is_string($finance_return_path) && basename($finance_return_path) === 'finan
     $finance_return_url = $finance_return_candidate;
 }
 $encoded_return = rawurlencode($finance_return_url);
+
+$finance_perf_mark('render_context_ready');
+
+if ($finance_perf_enabled) {
+    $total_ms = round((microtime(true) - $finance_perf_start) * 1000, 2);
+    $breakdown_parts = [];
+    foreach ($finance_perf_marks as $mark) {
+        $breakdown_parts[] = $mark['label'] . ':' . number_format($mark['ms'], 2, '.', '');
+    }
+
+    logError(
+        'finance_perf student_id=' . intval($student_id)
+        . ' total_ms=' . number_format($total_ms, 2, '.', '')
+        . ' breakdown=' . implode(' | ', $breakdown_parts),
+        'INFO'
+    );
+
+    if (!headers_sent()) {
+        header('X-Finance-Perf-Ms: ' . number_format($total_ms, 2, '.', ''));
+    }
+}
 
 $conn->close();
 // --- AJAX HANDLER ---
@@ -628,7 +673,8 @@ if (!$is_ajax) {
 
             <div class="card">
                 <h3 class="section-title"><i class="bi bi-credit-card-2-front" aria-hidden="true"></i> Add Payment</h3>
-                <form method="post" action="?id=<?php echo $student_id; ?>&term=<?php echo urlencode($selected_key); ?>" class="finance-action-form payment-form">
+                <p class="form-status-note">Records are applied to the currently selected academic term.</p>
+                <form method="post" action="?id=<?php echo $student_id; ?>&term=<?php echo urlencode($selected_key); ?>" class="finance-action-form payment-form workflow-form">
                     <?php echo csrf_token_field($csrf_scope); ?>
                     <input type="hidden" name="action" value="payment">
                     <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($finance_submission_token); ?>">
@@ -652,7 +698,8 @@ if (!$is_ajax) {
 
             <div class="card">
                 <h3 class="section-title"><i class="bi bi-receipt-cutoff" aria-hidden="true"></i> Add Fee</h3>
-                <form method="post" action="?id=<?php echo $student_id; ?>&term=<?php echo urlencode($selected_key); ?>" class="finance-action-form add-fee-form">
+                <p class="form-status-note">Use this for one-time or additional assessed charges with optional notes.</p>
+                <form method="post" action="?id=<?php echo $student_id; ?>&term=<?php echo urlencode($selected_key); ?>" class="finance-action-form add-fee-form workflow-form">
                     <?php echo csrf_token_field($csrf_scope); ?>
                     <input type="hidden" name="action" value="add_fee">
                     <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($finance_submission_token); ?>">
@@ -687,7 +734,8 @@ if (!$is_ajax) {
         function updateFinanceFilter(val) {
              const studentId = '<?php echo $student_id; ?>';
                const returnParam = '<?php echo $encoded_return; ?>';
-               const url = `?id=${studentId}&term=${encodeURIComponent(val)}&return=${returnParam}`;
+                             const perfParam = <?php echo $finance_perf_enabled ? "'&perf=1'" : "''"; ?>;
+                             const url = `?id=${studentId}&term=${encodeURIComponent(val)}&return=${returnParam}${perfParam}`;
              
              // Opacity indicator
              const container = document.getElementById('finance-content');

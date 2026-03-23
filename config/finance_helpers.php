@@ -334,6 +334,8 @@ function applyOverpaymentCredit($conn, $overpayment_id, $ay, $sem) {
  * @return array ['terms' => array, 'grand_totals' => array]
  */
 function calculateAllTermsWithCarryForward($conn, $student_id) {
+    $student_id = intval($student_id);
+
     // Get student's program for tuition rate
     $program_id = getStudentProgramId($conn, $student_id);
     $rates = getProgramTuitionRate($conn, $program_id);
@@ -341,10 +343,10 @@ function calculateAllTermsWithCarryForward($conn, $student_id) {
     $program_lab_fee = $rates['lab_fee'];
     
     // Get fixed fees (excluding LAB since it's program-specific now)
-    $total_fixed_fee = 0;
-    $res = db_query($conn, "SELECT * FROM fees WHERE type = 'fixed' AND code != 'LAB'");
-    while($row = $res->fetch_assoc()) {
-        $total_fixed_fee += floatval($row['amount']);
+    $total_fixed_fee = 0.0;
+    $fixed_fee_row = db_fetch_one(db_query($conn, "SELECT COALESCE(SUM(amount), 0) AS total_fixed FROM fees WHERE type = 'fixed' AND code != 'LAB'"));
+    if ($fixed_fee_row) {
+        $total_fixed_fee = floatval($fixed_fee_row['total_fixed'] ?? 0);
     }
     $total_fixed_fee += $program_lab_fee;
     
@@ -355,6 +357,32 @@ function calculateAllTermsWithCarryForward($conn, $student_id) {
                   WHERE e.student_id = ? 
                   ORDER BY e.academic_year ASC, c.semester ASC";
     $terms = db_fetch_all(db_query($conn, $terms_sql, 'i', [$student_id]));
+
+    // Batch-load total units per term to avoid one query per term.
+    $units_lookup = [];
+    $units_sql = "SELECT e.academic_year, c.semester, SUM(c.units) AS total_units
+                  FROM enrollments e
+                  JOIN curriculum c ON e.curriculum_id = c.curriculum_id
+                  WHERE e.student_id = ?
+                    AND e.status IN ('Enrolled', 'Passed', 'Failed')
+                  GROUP BY e.academic_year, c.semester";
+    $units_rows = db_fetch_all(db_query($conn, $units_sql, 'i', [$student_id]));
+    foreach ($units_rows as $row) {
+        $units_key = (string)($row['academic_year'] ?? '') . '|' . intval($row['semester'] ?? 0);
+        $units_lookup[$units_key] = floatval($row['total_units'] ?? 0);
+    }
+
+    // Batch-load total payments per term to avoid one query per term.
+    $payments_lookup = [];
+    $payments_sql = "SELECT academic_year, semester, SUM(amount) AS total_paid
+                     FROM payments
+                     WHERE student_id = ?
+                     GROUP BY academic_year, semester";
+    $payments_rows = db_fetch_all(db_query($conn, $payments_sql, 'i', [$student_id]));
+    foreach ($payments_rows as $row) {
+        $payments_key = (string)($row['academic_year'] ?? '') . '|' . intval($row['semester'] ?? 0);
+        $payments_lookup[$payments_key] = floatval($row['total_paid'] ?? 0);
+    }
     
     $result_terms = [];
     $running_credit = 0; // Carry-forward credit from previous terms
@@ -365,15 +393,9 @@ function calculateAllTermsWithCarryForward($conn, $student_id) {
     foreach ($terms as $term) {
         $ay = $term['academic_year'];
         $sem = $term['semester'];
-        
-        // Get units for this term
-        $u_sql = "SELECT SUM(c.units) as total_units 
-                  FROM enrollments e 
-                  JOIN curriculum c ON e.curriculum_id = c.curriculum_id 
-                  WHERE e.student_id = ? AND e.academic_year = ? AND c.semester = ? 
-                  AND e.status IN ('Enrolled', 'Passed', 'Failed')";
-        $units_row = db_fetch_one(db_query($conn, $u_sql, 'isi', [$student_id, $ay, $sem]));
-        $units = $units_row ? floatval($units_row['total_units']) : 0;
+
+        $term_key = (string)$ay . '|' . intval($sem);
+        $units = $units_lookup[$term_key] ?? 0.0;
         
         $tuition = $units * $tuition_rate;
         $misc = ($units > 0) ? $total_fixed_fee : 0;
@@ -385,11 +407,7 @@ function calculateAllTermsWithCarryForward($conn, $student_id) {
         $gross_assessment = $tuition + $misc;
         $net_assessment = $gross_assessment - $term_discount;
         
-        // Get payments for this term
-        $pay_sql = "SELECT SUM(amount) as total_paid FROM payments 
-                    WHERE student_id = ? AND academic_year = ? AND semester = ?";
-        $pay_row = db_fetch_one(db_query($conn, $pay_sql, 'isi', [$student_id, $ay, $sem]));
-        $term_paid = $pay_row && $pay_row['total_paid'] ? floatval($pay_row['total_paid']) : 0;
+        $term_paid = $payments_lookup[$term_key] ?? 0.0;
         
         // Apply carry-forward credit from previous terms
         $credit_applied = 0;
@@ -867,7 +885,14 @@ function getFallbackPromotionMeritDiscountPercent($conn, $student_id, $target_ay
     $target_ay = trim((string)$target_ay);
     $target_sem = intval($target_sem);
 
+    static $fallback_merit_cache = [];
+    $cache_key = $student_id . '|' . $target_ay . '|' . $target_sem;
+    if (array_key_exists($cache_key, $fallback_merit_cache)) {
+        return $fallback_merit_cache[$cache_key];
+    }
+
     if ($student_id <= 0 || $target_ay === '' || ($target_sem !== 1 && $target_sem !== 2)) {
+        $fallback_merit_cache[$cache_key] = 0.0;
         return 0.0;
     }
 
@@ -882,6 +907,7 @@ function getFallbackPromotionMeritDiscountPercent($conn, $student_id, $target_ay
                            LIMIT 1";
     $existing_merit = db_fetch_one(db_query($conn, $existing_merit_sql, 'isi', [$student_id, $target_ay, $target_sem]));
     if ($existing_merit) {
+        $fallback_merit_cache[$cache_key] = 0.0;
         return 0.0;
     }
 
@@ -901,6 +927,7 @@ function getFallbackPromotionMeritDiscountPercent($conn, $student_id, $target_ay
     }
 
     if ($source_ay === '' || $source_sem <= 0) {
+        $fallback_merit_cache[$cache_key] = 0.0;
         return 0.0;
     }
 
@@ -919,19 +946,24 @@ function getFallbackPromotionMeritDiscountPercent($conn, $student_id, $target_ay
     $highest_grade = isset($grade_row['highest_grade']) ? floatval($grade_row['highest_grade']) : 0.0;
 
     if ($best_grade <= 0) {
+        $fallback_merit_cache[$cache_key] = 0.0;
         return 0.0;
     }
 
     if ($best_grade <= 1.25 && $highest_grade <= 1.25) {
+        $fallback_merit_cache[$cache_key] = 75.0;
         return 75.0;
     }
     if ($best_grade <= 1.50 && $highest_grade <= 1.50) {
+        $fallback_merit_cache[$cache_key] = 50.0;
         return 50.0;
     }
     if ($best_grade <= 1.75 && $highest_grade < 2.00) {
+        $fallback_merit_cache[$cache_key] = 25.0;
         return 25.0;
     }
 
+    $fallback_merit_cache[$cache_key] = 0.0;
     return 0.0;
 }
 
@@ -944,6 +976,16 @@ function getFallbackPromotionMeritDiscountPercent($conn, $student_id, $target_ay
  * @return array List of student scholarships with details
  */
 function getStudentScholarships($conn, $student_id, $ay = null, $sem = null) {
+    $student_id = intval($student_id);
+    $cache_ay = $ay === null ? '*' : (string)$ay;
+    $cache_sem = $sem === null ? '*' : intval($sem);
+
+    static $student_scholarships_cache = [];
+    $cache_key = $student_id . '|' . $cache_ay . '|' . $cache_sem;
+    if (array_key_exists($cache_key, $student_scholarships_cache)) {
+        return $student_scholarships_cache[$cache_key];
+    }
+
     $sql = "SELECT ss.*, s.code, s.name, s.discount_type, s.discount_value, s.applies_to
             FROM student_scholarships ss
             JOIN scholarships s ON ss.scholarship_id = s.scholarship_id
@@ -967,7 +1009,10 @@ function getStudentScholarships($conn, $student_id, $ay = null, $sem = null) {
     $sql .= " ORDER BY ss.academic_year DESC, ss.semester DESC";
     
     $result = db_query($conn, $sql, $types, $params);
-    return $result ? db_fetch_all($result) : [];
+    $scholarships = $result ? db_fetch_all($result) : [];
+    $student_scholarships_cache[$cache_key] = $scholarships;
+
+    return $scholarships;
 }
 
 /**

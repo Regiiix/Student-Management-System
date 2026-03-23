@@ -14,6 +14,9 @@ $message = '';
 $message_type = '';
 $merit_notice = '';
 $merit_notice_type = 'info';
+$requires_confirmation = false;
+$save_result_modal = null;
+$pending_change_items = [];
 $csrf_scope = 'edit_student_' . $student_id;
 csrf_ensure_session();
 $system_current_ay = (string)getSystemSetting($conn, 'current_academic_year', (date('Y') . '-' . (date('Y') + 1)));
@@ -56,18 +59,73 @@ $student = db_fetch_one($result);
 // Get all programs for dropdown (cached for performance)
 $programs = getCachedPrograms($conn);
 
+$program_name_map = [];
+foreach ($programs as $program_item) {
+    $program_name_map[(int)$program_item['program_id']] = trim((string)($program_item['program_code'] ?? ''))
+        . ' - ' . trim((string)($program_item['program_name'] ?? ''));
+}
+
+$format_display_value = static function ($value) {
+    $value = trim((string)$value);
+    return $value === '' ? '(empty)' : $value;
+};
+
+$format_date_value = static function ($value) {
+    $value = trim((string)$value);
+    if ($value === '') {
+        return '(empty)';
+    }
+    $timestamp = strtotime($value);
+    if ($timestamp === false) {
+        return $value;
+    }
+    return date('M d, Y', $timestamp);
+};
+
+$format_semester_value = static function ($semester) {
+    $semester = intval($semester);
+    if ($semester === 0) {
+        return 'Summer Term';
+    }
+    if ($semester === 1) {
+        return '1st Semester';
+    }
+    if ($semester === 2) {
+        return '2nd Semester';
+    }
+    return 'Semester ' . $semester;
+};
+
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $submitted_submission_token = trim((string)($_POST['submission_token'] ?? ''));
     if ($submitted_submission_token === '' || !isset($_SESSION[$submission_token_key][$submitted_submission_token])) {
         $message = 'This edit request was already submitted or expired. Please try again.';
         $message_type = 'error';
+        $save_result_modal = [
+            'show' => true,
+            'type' => 'error',
+            'title' => 'Unable to save changes',
+            'message' => $message,
+            'changes' => [],
+            'merit_notice' => '',
+            'merit_notice_type' => 'info',
+        ];
     } else {
         unset($_SESSION[$submission_token_key][$submitted_submission_token]);
 
         if (!csrf_validate_request_token($csrf_scope, 'csrf_token', false)) {
             $message = 'Invalid or expired security token. Please refresh and try again.';
             $message_type = 'error';
+            $save_result_modal = [
+                'show' => true,
+                'type' => 'error',
+                'title' => 'Unable to save changes',
+                'message' => $message,
+                'changes' => [],
+                'merit_notice' => '',
+                'merit_notice_type' => 'info',
+            ];
         } else {
             $first_name = trim($_POST['first_name'] ?? '');
             $middle_name = trim($_POST['middle_name'] ?? '');
@@ -81,6 +139,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $year_level = intval($_POST['year_level'] ?? 1);
             $current_semester = intval($_POST['current_semester'] ?? 1);
             $status = $_POST['status'] ?? 'Active';
+
+            $pending_change_items = [];
+            $track_change = static function (&$target, $label, $before, $after) use ($format_display_value) {
+                if ((string)$before === (string)$after) {
+                    return;
+                }
+
+                $target[] = [
+                    'label' => $label,
+                    'before' => $format_display_value($before),
+                    'after' => $format_display_value($after),
+                ];
+            };
+
+            $track_change($pending_change_items, 'First Name', trim((string)($student['first_name'] ?? '')), $first_name);
+            $track_change($pending_change_items, 'Middle Name', trim((string)($student['middle_name'] ?? '')), $middle_name);
+            $track_change($pending_change_items, 'Last Name', trim((string)($student['last_name'] ?? '')), $last_name);
+            $track_change($pending_change_items, 'Email Address', trim((string)($student['email'] ?? '')), $email);
+            $track_change($pending_change_items, 'Phone Number', trim((string)($student['phone'] ?? '')), $phone);
+            $track_change(
+                $pending_change_items,
+                'Date of Birth',
+                $format_date_value($student['date_of_birth'] ?? ''),
+                $format_date_value($date_of_birth)
+            );
+            $track_change($pending_change_items, 'Gender', trim((string)($student['gender'] ?? '')), $gender);
+            $track_change($pending_change_items, 'Address', trim((string)($student['address'] ?? '')), $address);
+            $track_change(
+                $pending_change_items,
+                'Program',
+                $program_name_map[intval($student['program_id'] ?? 0)] ?? ('Program #' . intval($student['program_id'] ?? 0)),
+                $program_name_map[$program_id] ?? ('Program #' . $program_id)
+            );
+            $track_change($pending_change_items, 'Year Level', 'Year ' . intval($student['year_level'] ?? 1), 'Year ' . $year_level);
+            $track_change(
+                $pending_change_items,
+                'Current Semester',
+                $format_semester_value($student['current_semester'] ?? 1),
+                $format_semester_value($current_semester)
+            );
+            $track_change($pending_change_items, 'Status', trim((string)($student['status'] ?? '')), $status);
 
             // Validation
             $errors = [];
@@ -355,6 +454,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $conn->commit();
                         $message_type = 'success';
 
+                        $save_result_modal = [
+                            'show' => true,
+                            'type' => 'success',
+                            'title' => 'Changes saved successfully',
+                            'message' => $message,
+                            'changes' => $pending_change_items,
+                            'merit_notice' => $merit_notice,
+                            'merit_notice_type' => $merit_notice_type,
+                        ];
+
                         // Refresh student data
                         $result = db_query($conn, $sql, 'i', [$student_id]);
                         if ($result && $result->num_rows > 0) {
@@ -364,14 +473,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $conn->rollback();
                         $message = $e->getMessage();
                         $message_type = 'error';
+                        $save_result_modal = [
+                            'show' => true,
+                            'type' => 'error',
+                            'title' => 'Unable to save changes',
+                            'message' => $message,
+                            'changes' => $pending_change_items,
+                            'merit_notice' => '',
+                            'merit_notice_type' => 'info',
+                        ];
                     }
                 }
             } elseif (!empty($errors)) {
                 $message = implode('<br>', $errors);
                 $message_type = 'error';
+                $save_result_modal = [
+                    'show' => true,
+                    'type' => 'error',
+                    'title' => 'Unable to save changes',
+                    'message' => $message,
+                    'changes' => $pending_change_items,
+                    'merit_notice' => '',
+                    'merit_notice_type' => 'info',
+                ];
             }
 
-            if ($message_type !== 'success') {
+            if ($message_type !== 'success' && isset($first_name)) {
                 // Keep submitted values visible so retries/confirmations preserve user input.
                 $student['first_name'] = $first_name;
                 $student['middle_name'] = $middle_name;
@@ -413,6 +540,7 @@ $grades_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id 
     <div class="container">
         <header>
             <h1>Edit Student</h1>
+            <p class="form-page-subtitle">Update profile and academic details. Promotion-related checks run when saving.</p>
             <div class="header-actions">
                 <a href="<?php echo htmlspecialchars($student_list_url); ?>" class="btn btn-back"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to Student List</a>
                 <a href="<?php echo htmlspecialchars($view_info_url); ?>" class="btn btn-info"><i class="bi bi-person-vcard" aria-hidden="true"></i>View Info</a>
@@ -426,45 +554,70 @@ $grades_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id 
             ['label' => 'Edit Student']
         ]); ?>
 
-        <?php if ($message): ?>
-            <div class="message <?php echo $message_type; ?>">
-                <?php echo $message; ?>
-            </div>
+        <?php if (!empty($save_result_modal['show'])): ?>
+            <div id="saveResultModal" class="modal-overlay active" role="dialog" aria-modal="true" aria-labelledby="saveResultTitle">
+                <div class="modal-container save-result-modal save-result-<?php echo htmlspecialchars($save_result_modal['type'], ENT_QUOTES, 'UTF-8'); ?>">
+                    <div class="modal-header">
+                        <h3 id="saveResultTitle"><?php echo htmlspecialchars($save_result_modal['title'], ENT_QUOTES, 'UTF-8'); ?></h3>
+                    </div>
+                    <div class="modal-body">
+                        <p class="save-result-message"><?php echo nl2br(htmlspecialchars(strip_tags((string)$save_result_modal['message']), ENT_QUOTES, 'UTF-8')); ?></p>
 
-            <?php if ($merit_notice !== ''): ?>
-                <div class="message <?php echo htmlspecialchars($merit_notice_type, ENT_QUOTES, 'UTF-8'); ?>">
-                    <?php echo htmlspecialchars($merit_notice, ENT_QUOTES, 'UTF-8'); ?>
-                </div>
-            <?php endif; ?>
+                        <?php if (!empty($save_result_modal['changes'])): ?>
+                            <h4 class="save-result-subtitle">Updated Fields</h4>
+                            <ul class="save-result-change-list">
+                                <?php foreach ($save_result_modal['changes'] as $change_item): ?>
+                                    <li>
+                                        <span class="save-change-label"><?php echo htmlspecialchars($change_item['label'], ENT_QUOTES, 'UTF-8'); ?></span>
+                                        <span class="save-change-arrow"><?php echo htmlspecialchars($change_item['before'], ENT_QUOTES, 'UTF-8'); ?> -> <?php echo htmlspecialchars($change_item['after'], ENT_QUOTES, 'UTF-8'); ?></span>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        <?php elseif (($save_result_modal['type'] ?? '') === 'success'): ?>
+                            <p class="save-result-note">No field values changed compared to the previous record.</p>
+                        <?php endif; ?>
 
-            <?php if (isset($requires_confirmation) && $requires_confirmation): ?>
-                <div id="promotionModal" class="modal-overlay active">
-                    <div class="modal-container">
-                        <div class="modal-header">
-                            <h3>Force Promotion Confirmation</h3>
-                        </div>
-                        <div class="modal-body">
-                            <?php echo $message; ?>
-                            <p style="margin-top: 15px; font-size: 13px; color: #666; font-style: italic;">
-                                Note: This will create an offset payment entry to forward this balance to the next term.
+                        <?php if (!empty($save_result_modal['merit_notice'])): ?>
+                            <p class="save-result-note save-result-note-<?php echo htmlspecialchars($save_result_modal['merit_notice_type'], ENT_QUOTES, 'UTF-8'); ?>">
+                                <?php echo htmlspecialchars($save_result_modal['merit_notice'], ENT_QUOTES, 'UTF-8'); ?>
                             </p>
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" data-promo-action="cancel" class="btn-cancel">Cancel</button>
-                            <button type="button" data-promo-action="confirm" class="btn-confirm">Proceed & Forward Balance</button>
-                        </div>
+                        <?php endif; ?>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn-confirm" data-save-result-action="close">Close</button>
                     </div>
                 </div>
-            <?php endif; ?>
+            </div>
+        <?php endif; ?>
+
+        <?php if ($requires_confirmation): ?>
+            <div id="promotionModal" class="modal-overlay active">
+                <div class="modal-container">
+                    <div class="modal-header">
+                        <h3>Force Promotion Confirmation</h3>
+                    </div>
+                    <div class="modal-body">
+                        <?php echo $message; ?>
+                        <p style="margin-top: 15px; font-size: 13px; color: #666; font-style: italic;">
+                            Note: This will create an offset payment entry to forward this balance to the next term.
+                        </p>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" data-promo-action="cancel" class="btn-cancel">Cancel</button>
+                        <button type="button" data-promo-action="confirm" class="btn-confirm">Proceed & Forward Balance</button>
+                    </div>
+                </div>
+            </div>
         <?php endif; ?>
 
         <div class="student-details">
-            <form method="post" class="edit-student-form">
+            <form method="post" class="edit-student-form workflow-form">
                 <?php echo csrf_token_field($csrf_scope); ?>
                 <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($edit_student_submission_token); ?>">
                 <!-- Student Number (Read-only) -->
                 <div class="form-section">
                     <h3>Student Identification</h3>
+                    <p class="section-note">Reference fields tied to registrar records.</p>
                     <div class="form-group">
                         <label>Student Number</label>
                         <div class="student-number-display"><?php echo htmlspecialchars($student['student_number']); ?></div>
@@ -474,6 +627,7 @@ $grades_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id 
                 <!-- Personal Information -->
                 <div class="form-section">
                     <h3>Personal Information</h3>
+                    <p class="section-note">Keep contact information current to support notices and account recovery.</p>
                     <div class="form-row">
                         <div class="form-group">
                             <label for="first_name">First Name <span class="required">*</span></label>
@@ -522,6 +676,7 @@ $grades_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id 
                 <!-- Academic Information -->
                 <div class="form-section">
                     <h3>Academic Information</h3>
+                    <p class="section-note">Changes here affect enrollment, progression, and finance calculations.</p>
                     <div class="form-row">
                         <div class="form-group">
                             <label for="program_id">Program <span class="required">*</span></label>
@@ -566,7 +721,7 @@ $grades_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id 
 
                 <div class="form-actions">
                     <a href="<?php echo htmlspecialchars($view_info_url); ?>" class="btn btn-back">Cancel</a>
-                    <button type="submit" class="btn btn-add">Save Changes</button>
+                    <button type="submit" id="saveChangesBtn" class="btn btn-add">Save Changes</button>
                 </div>
             </form>
         </div>
@@ -582,6 +737,20 @@ $grades_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id 
         function showSpinner() {
             document.getElementById('loadingSpinner').classList.add('active');
             document.body.style.overflow = 'hidden';
+        }
+
+        const saveChangesBtn = document.getElementById('saveChangesBtn');
+        const saveResultModal = document.getElementById('saveResultModal');
+        const saveResultCloseBtn = saveResultModal ? saveResultModal.querySelector('[data-save-result-action="close"]') : null;
+
+        function focusSaveResultCloseButton() {
+            if (!saveResultModal || !saveResultModal.classList.contains('active') || !saveResultCloseBtn) {
+                return;
+            }
+
+            window.setTimeout(function() {
+                saveResultCloseBtn.focus();
+            }, 30);
         }
 
         // Prevent duplicate submissions while the request is in-flight.
@@ -649,9 +818,36 @@ $grades_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id 
             }
         }
 
+        function closeSaveResultModal() {
+            const modal = document.getElementById('saveResultModal');
+            if (modal) {
+                modal.classList.remove('active');
+                setTimeout(() => {
+                    modal.style.display = 'none';
+                    if (saveChangesBtn) {
+                        saveChangesBtn.focus();
+                    }
+                }, 300);
+            }
+        }
+
         document.addEventListener('click', function(event) {
             const actionButton = event.target.closest('[data-promo-action]');
             if (!actionButton) {
+                const saveResultActionButton = event.target.closest('[data-save-result-action="close"]');
+                if (saveResultActionButton) {
+                    closeSaveResultModal();
+                    return;
+                }
+
+                if (event.target.id === 'saveResultModal') {
+                    closeSaveResultModal();
+                    return;
+                }
+
+                if (event.target.id === 'promotionModal') {
+                    closePromoModal();
+                }
                 return;
             }
 
@@ -662,6 +858,17 @@ $grades_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id 
                 closePromoModal();
             }
         });
+
+        document.addEventListener('keydown', function(event) {
+            if (event.key !== 'Escape') {
+                return;
+            }
+
+            closePromoModal();
+            closeSaveResultModal();
+        });
+
+        focusSaveResultCloseButton();
     </script>
 
 </body>

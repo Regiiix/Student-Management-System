@@ -44,10 +44,12 @@ if (isset($_GET['msg'])) {
             break;
         case 'promote_failed':
             $show_failure_modal = true;
+            $remaining_balance_raw = isset($_GET['remaining_balance']) ? floatval($_GET['remaining_balance']) : 0;
             $failure_modal_data = [
                 'title' => 'Promotion failed',
                 'name' => htmlspecialchars($_GET['name'] ?? ''),
-                'reason' => htmlspecialchars($_GET['reason'] ?? 'Student cannot be promoted at this time.')
+                'reason' => htmlspecialchars($_GET['reason'] ?? 'Student cannot be promoted at this time.'),
+                'remaining_balance' => $remaining_balance_raw > 0 ? number_format($remaining_balance_raw, 2) : ''
             ];
             break;
         case 'notfound':
@@ -245,7 +247,7 @@ if ($selected_program > 0) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Student Management System</title>
+    <title>School Student Services Portal</title>
     <link rel="icon" href="<?php echo htmlspecialchars(app_asset('images/site-favicon.svg')); ?>" type="image/svg+xml">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/common.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(app_asset('css/index.css')); ?>">
@@ -257,7 +259,7 @@ if ($selected_program > 0) {
     <div class="container">
         <header>
             <div class="header-top">
-                <h1>Student Management System</h1>
+                <h1>School Student Services Portal</h1>
             </div>
             <?php if ($view === 'students'): ?>
                         <?php if (!isset($students_result) || $students_result === false): ?>
@@ -767,6 +769,12 @@ if ($selected_program > 0) {
                             <span class="meta-label">Reason</span>
                             <span class="meta-value"><?php echo htmlspecialchars($failure_modal_data['reason']); ?></span>
                         </div>
+                        <?php if (!empty($failure_modal_data['remaining_balance'])): ?>
+                        <div class="meta-item">
+                            <span class="meta-label">Remaining Balance</span>
+                            <span class="meta-value">Php <?php echo htmlspecialchars($failure_modal_data['remaining_balance']); ?></span>
+                        </div>
+                        <?php endif; ?>
                     </div>
 
                     <p class="success-note">Resolve the requirement above, then try promoting again.</p>
@@ -1007,6 +1015,7 @@ if ($selected_program > 0) {
                 url.searchParams.delete('msg');
                 url.searchParams.delete('name');
                 url.searchParams.delete('reason');
+                url.searchParams.delete('remaining_balance');
                 window.history.replaceState({}, '', url);
             }
         }
@@ -1040,6 +1049,7 @@ if ($selected_program > 0) {
             url.searchParams.delete('has_conflicts');
             url.searchParams.delete('conflict_count');
                 url.searchParams.delete('reason');
+            url.searchParams.delete('remaining_balance');
             window.history.replaceState({}, '', url);
 
             setTimeout(() => {

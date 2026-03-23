@@ -15,28 +15,31 @@
     display: flex;
     gap: 0;
     margin: 24px 0;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-color);
 }
 
 .tab-btn {
     padding: 14px 24px;
     font-size: 14px;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--text-secondary);
     text-decoration: none;
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
-    transition: color 0.15s ease, border-color 0.15s ease;
+    transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+    border-top-left-radius: var(--radius-sm);
+    border-top-right-radius: var(--radius-sm);
 }
 
 .tab-btn:hover {
-    color: var(--text);
+    color: var(--primary);
+    background: var(--primary-soft);
 }
 
 .tab-btn.active {
-    color: var(--text);
-    border-bottom-color: var(--text);
-    font-weight: 600;
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+    font-weight: 700;
 }
 
 /* Student Details Section */
@@ -48,9 +51,9 @@
     font-size: 18px;
     margin: 40px 0 20px 0;
     padding-bottom: 10px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-color);
     color: var(--text);
-    font-weight: 600;
+    font-weight: 700;
     letter-spacing: -0.02em;
 }
 
@@ -62,9 +65,9 @@
     font-size: 15px;
     margin: 28px 0 14px 0;
     padding-bottom: 8px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-color);
     color: var(--text-secondary);
-    font-weight: 500;
+    font-weight: 600;
 }
 
 /* Info Table (for personal details) */
@@ -74,19 +77,20 @@
     margin-bottom: 10px;
     border-radius: var(--radius-md);
     overflow: hidden;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow-sm);
 }
 
 .info-table th,
 .info-table td {
     padding: 14px 16px;
     text-align: left;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-color);
     font-size: 14px;
 }
 
 .info-table th {
-    background: var(--bg);
+    background: var(--surface-soft);
     font-weight: 500;
     color: var(--text-secondary);
     width: 18%;

@@ -867,3 +867,45 @@ body.page-student-finance .balance-empty {
         justify-content: center;
     }
 }
+
+/* Phase 4 workflow refinements for action forms */
+body.page-student-finance .form-status-note {
+    margin: -4px 0 12px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
+body.page-student-finance .finance-action-form.workflow-form {
+    display: grid;
+    gap: 8px;
+}
+
+body.page-student-finance .finance-action-form.workflow-form label {
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+body.page-student-finance .finance-action-form.workflow-form input,
+body.page-student-finance .finance-action-form.workflow-form select,
+body.page-student-finance .finance-action-form.workflow-form textarea {
+    margin-bottom: 8px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.95);
+}
+
+body.page-student-finance .finance-action-form.workflow-form button[type="submit"] {
+    margin-top: 8px;
+    min-height: 42px;
+    position: sticky;
+    bottom: 8px;
+    z-index: 5;
+    box-shadow: 0 8px 16px rgba(19, 54, 61, 0.14);
+}
+
+@media (max-width: 768px) {
+    body.page-student-finance .finance-action-form.workflow-form button[type="submit"] {
+        position: static;
+        box-shadow: none;
+    }
+}

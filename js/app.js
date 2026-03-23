@@ -573,10 +573,29 @@ function initSidebarNavigation() {
         toggles.forEach((btn) => {
             btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
         });
+
+        if (mobileQuery.matches) {
+            sidebar.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+            if (backdrop) {
+                backdrop.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+            }
+        } else {
+            sidebar.setAttribute('aria-hidden', 'false');
+            if (backdrop) {
+                backdrop.setAttribute('aria-hidden', 'true');
+            }
+        }
     };
 
     const closeSidebar = () => {
         body.classList.remove('sidebar-open');
+        syncExpandedState();
+    };
+
+    const syncForViewport = () => {
+        if (!mobileQuery.matches) {
+            body.classList.remove('sidebar-open');
+        }
         syncExpandedState();
     };
 
@@ -615,11 +634,16 @@ function initSidebarNavigation() {
         mobileQuery.addEventListener('change', (event) => {
             if (!event.matches) {
                 closeSidebar();
+                return;
             }
+
+            syncExpandedState();
         });
+    } else if (typeof mobileQuery.addListener === 'function') {
+        mobileQuery.addListener(syncForViewport);
     }
 
-    syncExpandedState();
+    syncForViewport();
 }
 
 // ===================================

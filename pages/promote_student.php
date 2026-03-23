@@ -105,6 +105,9 @@ if (!empty($errors)) {
     $conn->close();
     $reason = implode(' ', $errors);
     $redirect = $return_target . '&msg=promote_failed&name=' . urlencode($student['last_name'] . ', ' . $student['first_name']) . '&reason=' . urlencode($reason);
+    if (round($term_balance, 2) > 0) {
+        $redirect .= '&remaining_balance=' . urlencode((string)round($term_balance, 2));
+    }
     header('Location: ' . $redirect);
     exit;
 }
@@ -193,6 +196,10 @@ try {
         . '&msg=promote_failed'
         . '&name=' . urlencode($student['last_name'] . ', ' . $student['first_name'])
         . '&reason=' . urlencode($e->getMessage());
+
+    if (round($term_balance, 2) > 0) {
+        $failure_url .= '&remaining_balance=' . urlencode((string)round($term_balance, 2));
+    }
 
     header('Location: ' . $failure_url);
     exit;
