@@ -92,7 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (empty($gender)) $errors[] = 'Gender is required';
             if ($program_id <= 0) $errors[] = 'Please select a program';
             if ($year_level < 1 || $year_level > 4) $errors[] = 'Invalid year level';
-            if ($current_semester < 1 || $current_semester > 2) $errors[] = 'Invalid semester';
+            if ($current_semester < 0 || $current_semester > 2) $errors[] = 'Invalid semester';
             if (!in_array($status, ['Active', 'Inactive', 'Graduated'])) $errors[] = 'Invalid status';
 
             // Check for duplicate email (excluding current student)
@@ -548,6 +548,7 @@ $grades_url = appendReturnParam('student_schedule_grades.php?id=' . $student_id 
                          <div class="form-group">
                             <label for="current_semester">Current Semester <span class="required">*</span></label>
                             <select id="current_semester" name="current_semester" required>
+                                <option value="0" <?php echo intval($student['current_semester'] ?? 1) === 0 ? 'selected' : ''; ?>>Summer Term</option>
                                 <option value="1" <?php echo ($student['current_semester'] ?? 1) == 1 ? 'selected' : ''; ?>>1st Semester</option>
                                 <option value="2" <?php echo ($student['current_semester'] ?? 1) == 2 ? 'selected' : ''; ?>>2nd Semester</option>
                             </select>

@@ -514,6 +514,11 @@ if (isset($_GET['academic_year']) && $_GET['academic_year'] === '') {
 if (isset($_GET['year']) && $_GET['year'] === '0') $selected_year = 0;
 if (isset($_GET['semester']) && $_GET['semester'] === '0') $selected_semester = 0;
 
+$has_specific_term = !$is_all_terms && $selected_ay !== '' && $selected_year > 0;
+$selected_semester_label = $selected_semester === 0
+    ? 'Summer Term'
+    : ($selected_semester === 1 ? '1st Semester' : ($selected_semester === 2 ? '2nd Semester' : ('Semester ' . $selected_semester)));
+
 $selected_key = $is_all_terms ? '||' : ($selected_ay . '|' . $selected_year . '|' . $selected_semester);
 
 // Just in case selected AY/Sem combination isn't in options, we still allow filtering by it? 
@@ -565,7 +570,7 @@ if ($active_tab === 'schedule') {
         $params[] = $selected_year;
         $types .= 'i';
     }
-    if ($selected_semester > 0) {
+    if ($has_specific_term) {
         $schedules_sql .= " AND c.semester = ?";
         $params[] = $selected_semester;
         $types .= 'i';
@@ -591,7 +596,7 @@ if ($active_tab === 'schedule') {
         $curr_params[] = $selected_year;
         $curr_types .= 'i';
     }
-    if ($selected_semester > 0) {
+    if ($has_specific_term) {
         $curriculum_sql .= " AND c.semester = ?";
         $curr_params[] = $selected_semester;
         $curr_types .= 'i';
@@ -604,7 +609,7 @@ if ($active_tab === 'schedule') {
     // Only fetch if we have a valid year/semester filter (to match Edit Enrollment logic)
     // Constraint: Only courses of corresponding program
     $available_courses = [];
-    if ($selected_year > 0 && $selected_semester > 0) {
+    if ($has_specific_term) {
         $avail_sql = "SELECT c.* 
                       FROM curriculum c
                       WHERE c.program_id = ? 
@@ -733,7 +738,7 @@ if ($active_tab === 'schedule') {
         $params[] = $selected_year;
         $types .= 'i';
     }
-    if ($selected_semester > 0) {
+    if ($has_specific_term) {
         $grades_sql .= " AND c.semester = ?";
         $params[] = $selected_semester;
         $types .= 'i';
@@ -805,7 +810,7 @@ if ($active_tab === 'schedule') {
         $term_types .= 'i';
     }
 
-    if ($selected_semester > 0) {
+    if ($has_specific_term) {
         $term_gpa_sql .= " AND c.semester = ?";
         $term_params[] = $selected_semester;
         $term_types .= 'i';
@@ -880,8 +885,8 @@ if ($active_tab === 'schedule') {
     $display_val_progress_total = $progress['total_units'] ?? 0;
 
     // Override if Specific Term Selected
-    if (!$is_all_terms && $selected_year > 0 && $selected_semester > 0) {
-        $display_label_gpa = "Term GPA (Year $selected_year, Sem $selected_semester)";
+    if ($has_specific_term) {
+        $display_label_gpa = "Term GPA (Year $selected_year, $selected_semester_label)";
         $display_label_standing = "Term Standing";
         $display_label_progress = "Term Progress";
         
@@ -1248,10 +1253,10 @@ if (!$is_ajax) {
                 <div id="scheduleTab" class="tab-content active">
                     <?php if (!empty($grouped_schedules)): ?>
                          <div class="section-header mb-sm">
-                            <h3>Class Schedule - <?php echo $selected_ay ? htmlspecialchars($selected_ay) . ' / ' : ''; ?>Year <?php echo $selected_year; ?><?php echo $selected_semester > 0 ? ' (Semester ' . $selected_semester . ')' : ''; ?></h3>
+                            <h3>Class Schedule - <?php echo $selected_ay ? htmlspecialchars($selected_ay) . ' / ' : ''; ?>Year <?php echo $selected_year; ?><?php echo $has_specific_term ? ' (' . htmlspecialchars($selected_semester_label) . ')' : ''; ?></h3>
                             <div class="actions-group">
                                 <button type="button" data-schedule-action="check-conflicts" class="btn btn-conflict-check">Check Conflicts</button>
-                                <?php if (!$is_all_terms && $selected_year > 0 && $selected_semester > 0): ?>
+                                <?php if ($has_specific_term): ?>
                                     <form method="post" action="" style="display:inline-block;" data-confirm="Are you sure you want to DROP ALL subjects for this semester? This action cannot be undone." data-confirm-title="Drop All Subjects" data-confirm-text="Drop All" data-confirm-style="danger">
                                         <?php echo csrf_token_field($csrf_scope); ?>
                                         <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($student_records_submission_token); ?>">
@@ -1315,7 +1320,7 @@ if (!$is_ajax) {
                             </table>
                         </div>
                     <?php elseif (!empty($courses)): ?>
-                        <h3>Courses - <?php echo $selected_ay ? htmlspecialchars($selected_ay) . ' / ' : ''; ?>Year <?php echo $selected_year; ?><?php echo $selected_semester > 0 ? ' (Semester ' . $selected_semester . ')' : ''; ?></h3>
+                        <h3>Courses - <?php echo $selected_ay ? htmlspecialchars($selected_ay) . ' / ' : ''; ?>Year <?php echo $selected_year; ?><?php echo $has_specific_term ? ' (' . htmlspecialchars($selected_semester_label) . ')' : ''; ?></h3>
                         <div class="table-container">
                             <table class="schedule-table">
                                 <thead>
@@ -1358,7 +1363,7 @@ if (!$is_ajax) {
                     <?php if (!empty($available_courses)): ?>
                         <div class="available-section">
                             <div class="section-header mb-sm">
-                                <h3>Available Courses to Enroll (Year <?php echo $selected_year; ?>, Sem <?php echo $selected_semester; ?>)</h3>
+                                <h3>Available Courses to Enroll (Year <?php echo $selected_year; ?>, <?php echo htmlspecialchars($selected_semester_label); ?>)</h3>
                                 <form method="post" class="inline-form" data-confirm="Enroll in ALL available courses?" data-confirm-title="Enroll All Available" data-confirm-text="Enroll All" data-confirm-style="primary">
                                     <?php echo csrf_token_field($csrf_scope); ?>
                                     <input type="hidden" name="submission_token" value="<?php echo htmlspecialchars($student_records_submission_token); ?>">

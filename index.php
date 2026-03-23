@@ -52,7 +52,7 @@ if (isset($_GET['msg'])) {
             break;
         case 'notfound':
             $notification = 'Student not found.';
-            $notification_type = 'error';
+            $notification_type = 'error'; 
             break;
         case 'error':
             $notification = 'An error occurred. Please try again.';
@@ -167,7 +167,9 @@ $programs = getCachedPrograms($conn);
 // --- Curriculum (courses) filters and pagination ---
 $curriculum_program = isset($_GET['curriculum_program']) ? intval($_GET['curriculum_program']) : 0;
 $curriculum_year = isset($_GET['curriculum_year']) ? intval($_GET['curriculum_year']) : 0;
-$curriculum_semester = isset($_GET['curriculum_semester']) ? intval($_GET['curriculum_semester']) : 0;
+$curriculum_semester_raw = isset($_GET['curriculum_semester']) ? intval($_GET['curriculum_semester']) : 0;
+$curriculum_semester_filter_enabled = $curriculum_semester_raw > 0;
+$curriculum_semester = $curriculum_semester_raw === 3 ? 0 : $curriculum_semester_raw;
 $allowed_curriculum_page_sizes = [15, 30, 60, 100];
 $requested_curriculum_page_size = isset($_GET['cper_page']) ? intval($_GET['cper_page']) : 15;
 $curriculum_per_page = in_array($requested_curriculum_page_size, $allowed_curriculum_page_sizes, true)
@@ -191,7 +193,7 @@ if ($curriculum_year > 0) {
     $curriculum_params[] = $curriculum_year;
     $curriculum_types .= 'i';
 }
-if ($curriculum_semester > 0) {
+if ($curriculum_semester_filter_enabled) {
     $curriculum_where_clauses[] = "c.semester = ?";
     $curriculum_params[] = $curriculum_semester;
     $curriculum_types .= 'i';
@@ -397,10 +399,11 @@ if ($selected_program > 0) {
                     </select>
                     <select name="curriculum_semester" class="filter-select" data-index-change="submit-form">
                         <option value="0">All Semesters</option>
+                        <option value="3" <?php echo $curriculum_semester_raw == 3 ? 'selected' : ''; ?>>Summer Term</option>
                         <option value="1" <?php echo $curriculum_semester == 1 ? 'selected' : ''; ?>>1st Sem</option>
                         <option value="2" <?php echo $curriculum_semester == 2 ? 'selected' : ''; ?>>2nd Sem</option>
                     </select>
-                    <?php if ($curriculum_program > 0 || $curriculum_year > 0 || $curriculum_semester > 0): ?>
+                    <?php if ($curriculum_program > 0 || $curriculum_year > 0 || $curriculum_semester_filter_enabled): ?>
                     <a href="?view=curriculum&cper_page=<?php echo $curriculum_per_page; ?>" class="filter-reset" title="Reset filters"><i class="bi bi-x-lg" aria-hidden="true"></i><span class="sr-only">Reset filters</span></a>
                     <?php endif; ?>
                 </form>
@@ -659,8 +662,8 @@ if ($selected_program > 0) {
                                 <?php if ($curriculum_year > 0): ?>
                                     <input type="hidden" name="curriculum_year" value="<?php echo $curriculum_year; ?>">
                                 <?php endif; ?>
-                                <?php if ($curriculum_semester > 0): ?>
-                                    <input type="hidden" name="curriculum_semester" value="<?php echo $curriculum_semester; ?>">
+                                <?php if ($curriculum_semester_filter_enabled): ?>
+                                    <input type="hidden" name="curriculum_semester" value="<?php echo $curriculum_semester_raw; ?>">
                                 <?php endif; ?>
 
                                 <label for="curriculumRowsPerPage" class="pagination-tool-label">Rows</label>
@@ -681,8 +684,8 @@ if ($selected_program > 0) {
                                 <?php if ($curriculum_year > 0): ?>
                                     <input type="hidden" name="curriculum_year" value="<?php echo $curriculum_year; ?>">
                                 <?php endif; ?>
-                                <?php if ($curriculum_semester > 0): ?>
-                                    <input type="hidden" name="curriculum_semester" value="<?php echo $curriculum_semester; ?>">
+                                <?php if ($curriculum_semester_filter_enabled): ?>
+                                    <input type="hidden" name="curriculum_semester" value="<?php echo $curriculum_semester_raw; ?>">
                                 <?php endif; ?>
 
                                 <label for="curriculumJumpPage" class="pagination-tool-label">Page</label>
@@ -928,8 +931,8 @@ if ($selected_program > 0) {
                 const currentSem = trigger.getAttribute('data-current-semester') || '?';
                 const targetYear = trigger.getAttribute('data-target-year-level') || '?';
                 const targetSem = trigger.getAttribute('data-target-semester') || '?';
-                const currentSemLabel = currentSem === '1' ? '1st Sem' : (currentSem === '2' ? '2nd Sem' : 'Sem ' + currentSem);
-                const targetSemLabel = targetSem === '1' ? '1st Sem' : (targetSem === '2' ? '2nd Sem' : 'Sem ' + targetSem);
+                const currentSemLabel = currentSem === '0' ? 'Summer Term' : (currentSem === '1' ? '1st Sem' : (currentSem === '2' ? '2nd Sem' : 'Sem ' + currentSem));
+                const targetSemLabel = targetSem === '0' ? 'Summer Term' : (targetSem === '1' ? '1st Sem' : (targetSem === '2' ? '2nd Sem' : 'Sem ' + targetSem));
                 if (promoteUrl) {
                     const details = [
                         `Current: Year ${currentYear} ${currentSemLabel}`,

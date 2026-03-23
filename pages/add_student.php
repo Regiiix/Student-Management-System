@@ -103,8 +103,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $student_number = $year_prefix . '-' . str_pad($new_seq, 5, '0', STR_PAD_LEFT);
 
                         // Insert student
-                        $insert_sql = "INSERT INTO students (student_number, first_name, middle_name, last_name, email, date_of_birth, gender, address, phone, year_level, status)
-                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active')";
+                        $insert_sql = "INSERT INTO students (student_number, first_name, middle_name, last_name, email, date_of_birth, gender, address, phone, year_level, current_semester, status)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'Active')";
                         $stmt = $conn->prepare($insert_sql);
                         if (!$stmt) {
                             throw new Exception('Prepare failed: ' . $conn->error);

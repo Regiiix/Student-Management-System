@@ -32,10 +32,14 @@ $student = db_fetch_one($result);
 
 // Get filter parameters
 $selected_year = isset($_GET['year']) ? intval($_GET['year']) : intval($student['year_level']);
-$selected_semester = isset($_GET['semester']) ? intval($_GET['semester']) : 1;
+$selected_semester_raw = isset($_GET['semester']) ? intval($_GET['semester']) : 1;
+$selected_semester = $selected_semester_raw === 3 ? 0 : $selected_semester_raw;
 if ($selected_year < 0) $selected_year = 0;
 if ($selected_year > 4) $selected_year = 4;
-if ($selected_semester !== 1 && $selected_semester !== 2) $selected_semester = 0;
+if (!in_array($selected_semester_raw, [0, 1, 2, 3], true)) {
+    $selected_semester_raw = 0;
+    $selected_semester = 0;
+}
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -129,7 +133,7 @@ if ($selected_year > 0) {
     $params[] = $selected_year;
     $types .= 'i';
 }
-if ($selected_semester > 0) {
+if ($selected_semester_raw > 0) {
     $grades_sql .= " AND c.semester = ?";
     $params[] = $selected_semester;
     $types .= 'i';
@@ -210,9 +214,10 @@ $personal_info_url = appendReturnParam('student_personal.php?id=' . $student_id,
                 </select>
                 <label for="semesterFilter">Semester:</label>
                 <select id="semesterFilter" name="semester" class="sort-select">
-                    <option value="0" <?php echo $selected_semester === 0 ? 'selected' : ''; ?>>All Semesters</option>
-                    <option value="1" <?php echo $selected_semester === 1 ? 'selected' : ''; ?>>1st Semester</option>
-                    <option value="2" <?php echo $selected_semester === 2 ? 'selected' : ''; ?>>2nd Semester</option>
+                    <option value="0" <?php echo $selected_semester_raw === 0 ? 'selected' : ''; ?>>All Semesters</option>
+                    <option value="3" <?php echo $selected_semester_raw === 3 ? 'selected' : ''; ?>>Summer Term</option>
+                    <option value="1" <?php echo $selected_semester_raw === 1 ? 'selected' : ''; ?>>1st Semester</option>
+                    <option value="2" <?php echo $selected_semester_raw === 2 ? 'selected' : ''; ?>>2nd Semester</option>
                 </select>
                 <button type="submit" class="btn">Filter</button>
             </form>

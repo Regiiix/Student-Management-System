@@ -448,6 +448,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_schedule_suggestions') {
             $params[] = $failedCurriculumId;
             $types .= 'i';
         }
+
+        // Keep summer schedules out of the generic "Show All Schedules" list
+        // unless the selected term code explicitly targets Summer.
+        if ($semester !== 0) {
+            $sql .= " AND c.semester <> 0";
+        }
     } else {
         $sql .= " AND c.year_level = ? AND c.semester = ?";
         $params[] = $year_level;
@@ -1479,8 +1485,11 @@ $conn->close();
             
             const yearLevelNames = {1: '1st Year', 2: '2nd Year', 3: '3rd Year', 4: '4th Year'};
             const semesterNames = {0: 'Summer Term', 1: '1st Semester', 2: '2nd Semester'};
+            const hasAssignedSemester = student.current_semester !== null && student.current_semester !== '';
             document.getElementById('year_level').value = yearLevelNames[student.year_level] || student.year_level;
-            document.getElementById('semester').value = semesterNames[student.current_semester];
+            document.getElementById('semester').value = hasAssignedSemester
+                ? (semesterNames[student.current_semester] || `Semester ${student.current_semester}`)
+                : 'Not set yet';
             
             studentInfoDisplay.classList.remove('hidden');
             renderRetakeModeNotice(student);
@@ -1516,6 +1525,11 @@ $conn->close();
             
             let issues = [];
             let recommendations = [];
+
+            if (Number.isNaN(studentSemester)) {
+                termMismatchWarning.classList.add('hidden');
+                return;
+            }
             
             // Check semester mismatch
             if (termSemester !== studentSemester) {

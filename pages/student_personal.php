@@ -23,39 +23,60 @@ if (!$result || $result->num_rows === 0) {
 }
 $student = db_fetch_one($result);
 
-$semester_value = intval($student['current_semester'] ?? 0);
-if ($semester_value === 1) {
-    $semester_label = '1st Sem';
-} elseif ($semester_value === 2) {
-    $semester_label = '2nd Sem';
-} elseif ($semester_value === 0) {
-    $semester_label = 'Summer';
+$semester_raw = $student['current_semester'] ?? null;
+$semester_value = null;
+if ($semester_raw === null || $semester_raw === '') {
+    $semester_label = 'Not Set';
 } else {
-    $semester_label = 'Sem ' . $semester_value;
+    $semester_value = intval($semester_raw);
+    if ($semester_value === 1) {
+        $semester_label = '1st Sem';
+    } elseif ($semester_value === 2) {
+        $semester_label = '2nd Sem';
+    } elseif ($semester_value === 0) {
+        $semester_label = 'Summer';
+    } else {
+        $semester_label = 'Sem ' . $semester_value;
+    }
 }
 
 $term_summary = '';
 $term_options = get_student_term_options($conn, $student_id);
 $current_year_level = intval($student['year_level'] ?? 0);
 $current_ay = '';
+$current_term_enrolled_subjects = 0;
 
-foreach ($term_options as $option) {
-    if (intval($option['yl']) === $current_year_level && intval($option['sem']) === $semester_value) {
-        $current_ay = (string)($option['ay'] ?? '');
-        if (strpos((string)($option['label'] ?? ''), '- Current') !== false) {
-            break;
+if ($semester_value !== null) {
+    foreach ($term_options as $option) {
+        if (intval($option['yl']) === $current_year_level && intval($option['sem']) === $semester_value) {
+            $current_ay = (string)($option['ay'] ?? '');
+            if (strpos((string)($option['label'] ?? ''), '- Current') !== false) {
+                break;
+            }
         }
     }
 }
 
-if ($current_ay === '') {
-    $settings = getSystemSettings($conn);
-    $current_ay = (string)($settings['current_academic_year'] ?? '');
+if ($current_ay !== '' && $semester_value !== null) {
+    $term_summary = $semester_label . ' | A.Y. ' . $current_ay;
+
+    // Enrollment state should come from actual enrollment records, not student creation date.
+    $enrollment_state_sql = "SELECT COUNT(*) AS enrolled_count
+                             FROM enrollments e
+                             JOIN curriculum c ON e.curriculum_id = c.curriculum_id
+                             WHERE e.student_id = ?
+                               AND e.academic_year = ?
+                               AND c.year_level = ?
+                               AND c.semester = ?
+                               AND e.status = 'Enrolled'";
+    $enrollment_state_row = db_fetch_one(db_query($conn, $enrollment_state_sql, 'isii', [$student_id, $current_ay, $current_year_level, $semester_value]));
+    $current_term_enrolled_subjects = intval($enrollment_state_row['enrolled_count'] ?? 0);
 }
 
-if ($current_ay !== '') {
-    $term_summary = $semester_label . ' | A.Y. ' . $current_ay;
-}
+$is_current_term_enrolled = $current_term_enrolled_subjects > 0;
+$current_term_enrollment_label = $is_current_term_enrolled
+    ? ('Enrolled (' . $current_term_enrolled_subjects . ' subject' . ($current_term_enrolled_subjects === 1 ? '' : 's') . ')')
+    : 'Not Enrolled Yet';
 
 $conn->close();
 
@@ -118,7 +139,7 @@ $edit_student_url = appendReturnParam('edit_student.php?id=' . $student_id, $stu
                         <tr>
                             <th>Middle Name</th>
                             <td><?php echo htmlspecialchars($student['middle_name'] ?? 'N/A'); ?></td>
-                            <th>Date Enrolled</th>
+                            <th>Date Added</th>
                             <td><?php echo $student['created_at'] ? date('F d, Y', strtotime($student['created_at'])) : 'N/A'; ?></td>
                         </tr>
                         <tr>
@@ -169,12 +190,14 @@ $edit_student_url = appendReturnParam('edit_student.php?id=' . $student_id, $stu
                         <tr>
                             <th>Current Semester</th>
                             <td><?php echo htmlspecialchars($semester_label); ?></td>
-                            <th>Current Academic Year</th>
-                            <td><?php echo htmlspecialchars($current_ay !== '' ? $current_ay : 'N/A'); ?></td>
+                            <th>Enrollment State</th>
+                            <td><?php echo htmlspecialchars($current_term_enrollment_label); ?></td>
                         </tr>
                         <tr>
+                            <th>Current Academic Year</th>
+                            <td><?php echo htmlspecialchars($current_ay !== '' ? $current_ay : 'N/A'); ?></td>
                             <th>Program Name</th>
-                            <td colspan="3"><?php echo htmlspecialchars($student['program_name'] ?? 'N/A'); ?></td>
+                            <td><?php echo htmlspecialchars($student['program_name'] ?? 'N/A'); ?></td>
                         </tr>
                         <tr>
                             <th>Description</th>
